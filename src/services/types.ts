@@ -52,6 +52,7 @@ export interface Esp32Config {
   ip: string;              // IP que el hotspot le dio al ESP32 (la imprime el monitor serie)
   controlPort: number;     // 80 — API JSON
   streamPort: number;      // 81 — MJPEG
+  demo: boolean;           // true = ESP32 simulado dentro de la app (sin placa)
 }
 
 /** Respuesta de GET /status del firmware. */

@@ -8,6 +8,9 @@
  *   así que reintentarlos nunca deja el sistema en un estado distinto.
  */
 import type { DeviceStatus, Esp32Config, SecurityMode } from './types';
+import {
+  demoEvidence, demoSetFlash, demoSetMode, demoSetSiren, demoSnapshot, demoStatus,
+} from './demoDevice';
 
 export type Esp32ErrorKind = 'timeout' | 'network' | 'http' | 'invalid';
 
@@ -21,6 +24,21 @@ export class Esp32Error extends Error {
 export const STATUS_TIMEOUT_MS = 2500;
 export const COMMAND_TIMEOUT_MS = 3000;
 export const IMAGE_TIMEOUT_MS = 6000;
+
+/**
+ * En modo demo las llamadas van al ESP32 simulado en vez de a la red.
+ * Sus fallas se traducen a los mismos errores tipados que las reales.
+ */
+async function demoCall<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e instanceof Error && e.message === 'demo-no-evidence') {
+      throw new Esp32Error('http', 'HTTP 404: aún no hay evidencia', 404);
+    }
+    throw new Esp32Error('network', '¿El teléfono y el ESP32 están en la misma red? (demo: cámara desconectada)');
+  }
+}
 
 export function controlUrl(cfg: Esp32Config): string {
   return `http://${cfg.ip}:${cfg.controlPort}`;
@@ -60,6 +78,7 @@ function isDeviceStatus(x: any): x is DeviceStatus {
 }
 
 export async function getStatus(cfg: Esp32Config, signal?: AbortSignal): Promise<DeviceStatus> {
+  if (cfg.demo) return demoCall(demoStatus);
   const res = await request(`${controlUrl(cfg)}/status`, STATUS_TIMEOUT_MS, signal);
   let data: unknown;
   try {
@@ -88,18 +107,21 @@ async function withRetry<T>(fn: () => Promise<T>, attempts = 3, baseDelayMs = 30
 }
 
 export function setDeviceMode(cfg: Esp32Config, mode: SecurityMode): Promise<void> {
+  if (cfg.demo) return demoCall(() => demoSetMode(mode));
   return withRetry(async () => {
     await request(`${controlUrl(cfg)}/mode?value=${mode}`, COMMAND_TIMEOUT_MS);
   });
 }
 
 export function setFlash(cfg: Esp32Config, on: boolean): Promise<void> {
+  if (cfg.demo) return demoCall(() => demoSetFlash(on));
   return withRetry(async () => {
     await request(`${controlUrl(cfg)}/flash?state=${on ? 1 : 0}`, COMMAND_TIMEOUT_MS);
   });
 }
 
 export function setSiren(cfg: Esp32Config, on: boolean): Promise<void> {
+  if (cfg.demo) return demoCall(() => demoSetSiren(on));
   return withRetry(async () => {
     await request(`${controlUrl(cfg)}/siren?state=${on ? 1 : 0}`, COMMAND_TIMEOUT_MS);
   });
@@ -125,10 +147,12 @@ async function fetchJpegDataUrl(url: string): Promise<string> {
 
 /** Foto del último evento de movimiento (320×240, ~10-15 KB). */
 export function fetchEvidence(cfg: Esp32Config): Promise<string> {
+  if (cfg.demo) return demoCall(demoEvidence);
   return fetchJpegDataUrl(`${controlUrl(cfg)}/motion.jpg?t=${Date.now()}`);
 }
 
 /** Foto actual (640×480). */
 export function fetchSnapshot(cfg: Esp32Config): Promise<string> {
+  if (cfg.demo) return demoCall(demoSnapshot);
   return fetchJpegDataUrl(`${controlUrl(cfg)}/capture?t=${Date.now()}`);
 }

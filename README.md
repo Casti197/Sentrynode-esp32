@@ -82,9 +82,42 @@ npx eas-cli@latest build --profile development --platform android
 
 Luego, en la app: Horarios → ESP32 → escribe la IP del monitor serie → **Probar conexión**.
 
----
+### 4. Modo demo (practicar sin la placa)
 
-# Guía para la defensa técnica
+La app trae un ESP32 simulado. El video, la cámara y la foto son simulados; el motor de
+vigilancia, las alertas, los horarios y el **correo de EmailJS son los reales**.
+
+1. `npx expo start` y abre la app en Expo Go (no hace falta estar en el hotspot del ESP32,
+   pero el teléfono sí necesita internet para el correo).
+2. Horarios → ESP32 → activa **Modo demo**.
+3. En Horarios → Alertas Email llena Service ID, Template ID y Public Key.
+4. En Streaming, arma el sistema (**En Casa** o **Fuera de Casa**) y toca **Simular intrusión**.
+   Debe aparecer la alerta con la foto en la pestaña Alertas y llegar el correo con `intruso.jpg`.
+5. Prueba también:
+   - **Simular intrusión con el sistema desarmado** → no pasa nada (igual que el firmware real).
+   - **Desconectar cámara** → a los ~3 s pasa a "sin conexión"; si estás armado, a los 45 s llega la
+     alerta "Cámara sin conexión" (también por correo).
+   - **Reconectar cámara** → la app la detecta sola y el video vuelve.
+   - Desarmar a mano en medio de una franja horaria → queda desarmado hasta que termine la franja.
+
+### 5. Plantilla de EmailJS (paso a paso)
+
+1. **Email Services** → Add New Service → Gmail → conecta tu cuenta. Copia el **Service ID**.
+2. **Email Templates** → Create New Template:
+   - *Subject*: `🚨 SentryNode: {{alert_type}}`
+   - *To Email*: `{{to_email}}` · *From Name*: `{{from_name}}`
+   - *Content*: pega el HTML de [`docs/emailjs-template.html`](docs/emailjs-template.html).
+   - Pestaña **Attachments** → Add Attachment → **Variable Attachment** → Parameter Name `snapshot`,
+     Filename `intruso.jpg`, Content Type `image/jpeg`.
+   - Guarda y copia el **Template ID**.
+3. **Account → General**: copia la **Public Key**.
+4. **Account → Security**: activa **Allow EmailJS API for non-browser applications**
+   (si no, la app recibe error 403).
+5. En la app, Horarios → Alertas Email → llena los campos → **Enviar email de prueba**.
+
+Errores comunes: `403` = falta el paso 4 · `400 ... template` = Template ID mal copiado ·
+llega sin foto = el parámetro del adjunto no se llama exactamente `snapshot`.
+
 
 Las respuestas apuntan a lo que pide la rúbrica: explicar la arquitectura de red, justificar los
 flujos asíncronos, el manejo de estados del hardware y defenderse en las contrapreguntas.

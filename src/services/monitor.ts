@@ -111,7 +111,9 @@ class MonitorEngine {
   /** La UI llama esto cuando el usuario cambia la configuración. */
   updateConfig(patch: Partial<PersistedConfig>): void {
     if (!this.config) return;
-    const ipChanged = patch.esp32Config && patch.esp32Config.ip !== this.config.esp32Config.ip;
+    const ipChanged = patch.esp32Config && (
+      patch.esp32Config.ip !== this.config.esp32Config.ip ||
+      patch.esp32Config.demo !== this.config.esp32Config.demo);
     this.config = { ...this.config, ...patch };
     if (ipChanged) {
       // Otro dispositivo: su contador no tiene relación con el anterior

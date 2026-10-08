@@ -26,6 +26,7 @@ import { StatusBar } from 'expo-status-bar';
 import type { SecurityStore } from '@/store/useSecurityStore';
 import { setFlash, setSiren, streamUrl as buildStreamUrl } from '@/services/esp32Api';
 import { monitor } from '@/services/monitor';
+import { getDemoState, setDemoOnline, simulateIntrusion, subscribeDemo } from '@/services/demoDevice';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -134,6 +135,50 @@ function buildMjpegHtml(streamUrl: string): string {
 </html>`;
 }
 
+// ─── Video simulado (modo demo) ───────────────────────────────────────────────
+// Un <canvas> dibuja una habitación con ruido de sensor y hora, a ~15 fps.
+// window.intrude() hace cruzar una silueta; window.setOnline(false) muestra "SIN SEÑAL".
+
+function buildDemoHtml(): string {
+  return `<!DOCTYPE html><html><head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<style>html,body{margin:0;height:100%;background:#0a0e17;overflow:hidden}
+canvas{width:100%;height:100%;object-fit:contain;display:block}</style></head>
+<body><canvas id="c" width="320" height="240"></canvas><script>
+var c=document.getElementById('c'),x=c.getContext('2d'),online=true,walkStart=0;
+function room(){
+  var g=x.createLinearGradient(0,0,0,165);g.addColorStop(0,'#262a33');g.addColorStop(1,'#3a3f49');
+  x.fillStyle=g;x.fillRect(0,0,320,165);x.fillStyle='#2f2b26';x.fillRect(0,165,320,75);
+  x.fillStyle='#46505f';x.fillRect(30,40,80,60);x.strokeStyle='#5a5f69';x.lineWidth=3;x.strokeRect(30,40,80,60);
+  x.fillStyle='#3e342c';x.fillRect(205,55,60,110);x.fillStyle='#968c6e';x.fillRect(253,108,6,6);
+  x.fillStyle='#3c424e';x.fillRect(20,120,110,20);x.fillStyle='#373c46';x.fillRect(20,135,110,35);
+}
+function person(px){
+  x.fillStyle='#121216';x.beginPath();x.arc(px+11,82,12,0,6.3);x.fill();
+  x.beginPath();x.moveTo(px-8,98);x.lineTo(px+30,98);x.lineTo(px+36,160);x.lineTo(px+26,200);
+  x.lineTo(px+16,200);x.lineTo(px+11,165);x.lineTo(px+6,200);x.lineTo(px-4,200);x.lineTo(px-12,160);x.closePath();x.fill();
+  x.strokeStyle='#ff5a50';x.lineWidth=2;x.strokeRect(px-18,64,60,142);
+  x.fillStyle='#ff5a50';x.fillRect(px-18,52,84,12);x.fillStyle='#fff';x.font='9px monospace';x.fillText('MOVIMIENTO',px-15,61);
+}
+function noise(n){var d=x.getImageData(0,0,320,240),p=d.data;for(var i=0;i<p.length;i+=4){var r=(Math.random()-0.5)*n;p[i]+=r;p[i+1]+=r;p[i+2]+=r;}x.putImageData(d,0,0);}
+function hud(){x.fillStyle='rgba(0,0,0,.7)';x.fillRect(0,0,320,13);x.fillStyle='#4cd7f6';x.font='9px monospace';
+  x.fillText('SENTRYNODE CAM-01  DEMO  '+new Date().toLocaleTimeString(),4,10);
+  if(Date.now()%1000<500){x.fillStyle='#ff3c3c';x.beginPath();x.arc(312,6,3.5,0,6.3);x.fill();}}
+function frame(){
+  if(!online){noise(0);x.fillStyle='#111';x.fillRect(0,0,320,240);noise(160);
+    x.fillStyle='#ffb4ab';x.font='bold 16px monospace';x.fillText('SIN SEÑAL',112,124);return;}
+  room();
+  var t=Date.now()-walkStart;
+  if(walkStart&&t<4500){person(-40+t/4500*380);}
+  noise(18);hud();
+}
+window.intrude=function(){walkStart=Date.now();};
+window.setOnline=function(v){online=v;};
+setInterval(frame,66);frame();
+if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage('STREAM_LIVE');
+</script></body></html>`;
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function StreamingScreen({ store }: Props) {
@@ -145,7 +190,10 @@ export default function StreamingScreen({ store }: Props) {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attemptRef = useRef(0);
 
-  const streamUrl = buildStreamUrl(esp32Config);
+  const demo = esp32Config.demo;
+  const streamUrl = demo ? 'demo://camara' : buildStreamUrl(esp32Config);
+  const webViewRef = useRef<WebView>(null);
+  const [demoOnline, setDemoOnlineState] = useState(getDemoState().online);
   const status = live.status;
   const flashOn = status?.flash ?? false;
   const sirenOn = status?.siren ?? false;
@@ -190,6 +238,31 @@ export default function StreamingScreen({ store }: Props) {
   useEffect(() => () => {
     if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
   }, []);
+
+  // ── Modo demo: reflejar en el video simulado si la "placa" está conectada ─────
+  useEffect(() => {
+    if (!demo) return;
+    return subscribeDemo(() => {
+      const st = getDemoState();
+      setDemoOnlineState(st.online);
+      webViewRef.current?.injectJavaScript(`window.setOnline(${st.online});true;`);
+    });
+  }, [demo]);
+
+  const handleSimulateIntrusion = useCallback(() => {
+    webViewRef.current?.injectJavaScript('window.intrude();true;');
+    const counted = simulateIntrusion();
+    if (!counted) {
+      Alert.alert(
+        'Evento ignorado',
+        demoOnline
+          ? 'El sistema está DESARMADO: el ESP32 ve el movimiento pero no lo cuenta como intrusión. Arma el sistema (En Casa o Fuera de Casa) y vuelve a intentar.'
+          : 'La cámara está desconectada. Reconéctala primero.',
+      );
+    } else {
+      monitor.pokeNow();               // Que el motor lo vea ya, sin esperar el próximo ciclo
+    }
+  }, [demoOnline]);
 
   // ── Controles ───────────────────────────────────────────────────────────────
   // La UI no es optimista: muestra lo que el ESP32 confirma en /status.
@@ -305,7 +378,9 @@ export default function StreamingScreen({ store }: Props) {
             {/* MJPEG vía WebView. key nueva (IP o reconexión) → WebView y socket nuevos */}
             <WebView
               key={`${streamUrl}#${reconnectCount}`}
-              source={{ html: buildMjpegHtml(streamUrl) }}
+              ref={webViewRef}
+              injectedJavaScript={demo ? `window.setOnline && window.setOnline(${demoOnline});true;` : undefined}
+              source={{ html: demo ? buildDemoHtml() : buildMjpegHtml(streamUrl) }}
               style={{ flex: 1, backgroundColor: '#0a0e17' }}
               onMessage={handleWebViewMessage}
               onError={handleWebViewError}
@@ -351,7 +426,7 @@ export default function StreamingScreen({ store }: Props) {
 
             {/* Bottom-right: MJPEG badge */}
             <View className="absolute bottom-2 right-2 bg-surface-container-lowest/85 px-space-xs py-1 rounded" pointerEvents="none">
-              <Text className="font-label-caps text-label-caps text-primary uppercase">MJPEG</Text>
+              <Text className="font-label-caps text-label-caps text-primary uppercase">{demo ? 'DEMO' : 'MJPEG'}</Text>
             </View>
 
             {/* Bottom-left: camera model */}
@@ -397,6 +472,39 @@ export default function StreamingScreen({ store }: Props) {
               </View>
             </View>
           </View>
+
+          {/* ── Modo demo ────────────────────────────────────────────────────── */}
+          {demo && (
+            <View className="bg-surface-container-low rounded-xl p-space-md shadow-sm border border-primary/40">
+              <View className="flex-row items-center gap-space-xs mb-space-xs">
+                <MaterialCommunityIcons name="flask-outline" size={16} color="#4cd7f6" />
+                <Text className="font-label-caps text-label-caps text-primary uppercase tracking-wider">
+                  Modo demo · ESP32 simulado
+                </Text>
+              </View>
+              <Text className="font-body-sm text-body-sm text-on-surface-variant mb-space-sm">
+                El video y la cámara son simulados; el motor de vigilancia, las alertas y el correo de EmailJS son los reales.
+              </Text>
+              <View className="flex-row gap-space-xs">
+                <TouchableOpacity
+                  onPress={handleSimulateIntrusion}
+                  className="flex-1 bg-error/20 rounded-xl py-space-sm flex-row items-center justify-center gap-space-xs mr-1"
+                >
+                  <MaterialCommunityIcons name="walk" size={18} color="#ffb4ab" />
+                  <Text className="font-label-caps text-label-caps text-error uppercase font-bold">Simular intrusión</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => setDemoOnline(!demoOnline)}
+                  className="flex-1 bg-surface-container-highest rounded-xl py-space-sm flex-row items-center justify-center gap-space-xs ml-1"
+                >
+                  <MaterialIcons name={demoOnline ? 'power-off' : 'power'} size={18} color="#bcc9cd" />
+                  <Text className="font-label-caps text-label-caps text-on-surface uppercase font-bold">
+                    {demoOnline ? 'Desconectar cámara' : 'Reconectar cámara'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
 
           {/* ── Camera Controls ──────────────────────────────────────────────── */}
           <View className="flex-col mt-2 gap-space-xs">

@@ -34,6 +34,7 @@ export const DEFAULT_ESP32_CONFIG: Esp32Config = {
   ip: '192.168.4.1',   // AP de rescate; con el hotspot cámbiala por la IP que muestra el ESP32
   controlPort: 80,
   streamPort: 81,
+  demo: false,
 };
 
 export const DEFAULT_SCHEDULES: Schedule[] = [

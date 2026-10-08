@@ -391,7 +391,23 @@ export default function SchedulesScreen({ store }: Props) {
                 (115200 baudios) al arrancar. Si no encuentra el hotspot, crea la red “SentryNode-XXXX” y queda en 192.168.4.1.
               </Text>
 
-              {[
+              {/* Modo demo: ESP32 simulado para practicar sin la placa */}
+              <View className="flex-row items-center justify-between bg-surface-container-highest rounded-xl p-space-sm mb-space-md">
+                <View className="flex-1 mr-space-sm">
+                  <Text className="font-headline-sm text-headline-sm text-on-surface">Modo demo</Text>
+                  <Text className="font-body-sm text-body-sm text-on-surface-variant">
+                    Simula el ESP32 dentro de la app. El correo de EmailJS sí se envía de verdad.
+                  </Text>
+                </View>
+                <Switch
+                  value={esp32Config.demo}
+                  onValueChange={(v) => updateEsp32Config({ demo: v })}
+                  trackColor={{ false: '#31353f', true: '#4cd7f6' }}
+                  thumbColor={esp32Config.demo ? '#003640' : '#869397'}
+                />
+              </View>
+
+              {!esp32Config.demo && [
                 { key: 'ip', label: 'Dirección IP del ESP32', placeholder: '10.xx.xx.xx' },
                 { key: 'controlPort', label: 'Puerto de control (API)', placeholder: '80' },
                 { key: 'streamPort', label: 'Puerto de video (MJPEG)', placeholder: '81' },

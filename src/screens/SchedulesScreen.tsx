@@ -22,6 +22,7 @@ import type { SecurityStore, Schedule, SecurityMode } from '@/store/useSecurityS
 import { sendTestEmail } from '@/services/emailService';
 import { fetchSnapshot, getStatus } from '@/services/esp32Api';
 import { isValidTime } from '@/services/schedule';
+import { EmailLogPanel } from '@/screens/EmailLogPanel';
 
 interface Props {
   store: SecurityStore;
@@ -376,6 +377,8 @@ export default function SchedulesScreen({ store }: Props) {
                 </Text>
               </TouchableOpacity>
             </View>
+
+            <EmailLogPanel />
           </View>
         )}
 

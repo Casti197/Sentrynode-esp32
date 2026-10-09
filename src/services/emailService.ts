@@ -19,6 +19,7 @@
  * 320×240 con más compresión en vez de mandar el frame VGA completo.
  */
 import type { EmailConfig } from './types';
+import { emailLog, maskId } from './emailLog';
 
 const EMAILJS_API = 'https://api.emailjs.com/api/v1.0/email/send';
 const EMAIL_TIMEOUT_MS = 15000;
@@ -41,8 +42,14 @@ export function isEmailConfigured(c: EmailConfig): boolean {
 }
 
 export async function sendAlertEmail(config: EmailConfig, payload: AlertEmailPayload): Promise<EmailResult> {
+  const label = translateAlertType(payload.type);
   if (!isEmailConfigured(config)) {
-    return { ok: false, error: 'EmailJS no está configurado', retryable: false };
+    const missing = [
+      !config.serviceId && 'Service ID', !config.templateId && 'Template ID',
+      !config.publicKey && 'Public Key', !config.recipientEmail && 'destinatario',
+    ].filter(Boolean).join(', ');
+    emailLog('warn', `No se envió "${label}": EmailJS incompleto`, `Falta: ${missing}`);
+    return { ok: false, error: `EmailJS no está configurado (falta ${missing})`, retryable: false };
   }
 
   const humanTime = new Date(payload.timestamp).toLocaleString('es-CO', {
@@ -69,26 +76,39 @@ export async function sendAlertEmail(config: EmailConfig, payload: AlertEmailPay
   };
   if (config.privateKey) body.accessToken = config.privateKey;
 
+  const json = JSON.stringify(body);
+  const photoKb = payload.snapshotDataUrl ? Math.round(payload.snapshotDataUrl.length / 1024) : 0;
+  emailLog('info', `Enviando "${label}" a ${config.recipientEmail}`,
+    `service ${maskId(config.serviceId)} · template ${maskId(config.templateId)} · ` +
+    `${photoKb ? `foto ${photoKb} KB` : 'sin foto'} · petición ${Math.round(json.length / 1024)} KB`);
+
+  const t0 = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), EMAIL_TIMEOUT_MS);
   try {
     const res = await fetch(EMAILJS_API, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: json,
       signal: controller.signal,
     });
-    if (res.ok) return { ok: true };
+    const ms = Date.now() - t0;
+    if (res.ok) {
+      emailLog('success', `Enviado "${label}" ✓ (HTTP ${res.status}, ${ms} ms)`,
+        'EmailJS lo aceptó. Si no llega, revisa spam y el campo "To Email" del template.');
+      return { ok: true };
+    }
     const text = (await res.text()).slice(0, 200);
     // 4xx = configuración mala (no sirve reintentar). 429/5xx = transitorio.
     const retryable = res.status === 429 || res.status >= 500;
+    emailLog('error', `Falló "${label}": HTTP ${res.status} (${ms} ms)`, `${text}${hintFor(res.status, text)}`);
     return { ok: false, error: `EmailJS ${res.status}: ${text}`, retryable };
-  } catch {
-    return {
-      ok: false,
-      error: controller.signal.aborted ? 'Timeout enviando el correo' : 'Sin internet en el teléfono',
-      retryable: true,
-    };
+  } catch (e) {
+    const timedOut = controller.signal.aborted;
+    const error = timedOut ? 'Timeout enviando el correo' : 'Sin internet en el teléfono';
+    emailLog('error', `Falló "${label}": ${error}`,
+      timedOut ? `Sin respuesta en ${EMAIL_TIMEOUT_MS / 1000} s` : `${String(e)} · ¿el teléfono tiene datos o Wi-Fi con internet?`);
+    return { ok: false, error, retryable: true };
   } finally {
     clearTimeout(timer);
   }
@@ -103,6 +123,20 @@ export function sendTestEmail(config: EmailConfig, snapshotDataUrl?: string | nu
     esp32Ip: '-',
     snapshotDataUrl,
   });
+}
+
+/** Pista según el error típico de EmailJS. */
+function hintFor(status: number, text: string): string {
+  const t = text.toLowerCase();
+  if (status === 403 && t.includes('non-browser')) {
+    return ' → Activa "Allow EmailJS API for non-browser applications" en Account → Security.';
+  }
+  if (status === 403) return ' → Revisa la Public Key o, si activaste strict mode, la Private Key.';
+  if (t.includes('template')) return ' → Template ID incorrecto.';
+  if (t.includes('service')) return ' → Service ID incorrecto o servicio de Gmail desconectado.';
+  if (status === 413 || t.includes('size') || t.includes('large')) return ' → Adjunto demasiado grande para tu plan.';
+  if (status === 429) return ' → Límite de envíos de EmailJS; se reintentará solo.';
+  return '';
 }
 
 function translateAlertType(type: string): string {

@@ -26,6 +26,7 @@ import {
   Esp32Error, fetchEvidence, fetchSnapshot, getStatus, setDeviceMode,
 } from './esp32Api';
 import { isEmailConfigured, sendAlertEmail } from './emailService';
+import { emailLog } from './emailLog';
 import { sendAlertNotification, sendIntrusionAlert } from './notificationService';
 import { computeEffectiveMode } from './schedule';
 import {
@@ -324,6 +325,7 @@ class MonitorEngine {
 
     await saveJson(KEYS.ALERTS, this.alerts);
     this.emit();
+    emailLog('info', `Alerta nueva en cola de correo: ${alert.type}`, image ? 'con foto de evidencia' : 'sin foto');
     return alert;
   }
 
@@ -334,8 +336,20 @@ class MonitorEngine {
   }
 
   /** Envía los correos pendientes, uno a la vez, con backoff entre reintentos. */
+  private warnedNotConfigured = false;
+
   private async processEmailQueue(): Promise<void> {
-    if (this.emailBusy || !this.config || !isEmailConfigured(this.config.emailConfig)) return;
+    if (this.emailBusy || !this.config) return;
+    if (!isEmailConfigured(this.config.emailConfig)) {
+      const waiting = this.alerts.some(a => !a.emailSent && a.emailAttempts < EMAIL_MAX_ATTEMPTS);
+      if (waiting && !this.warnedNotConfigured) {
+        this.warnedNotConfigured = true;
+        emailLog('warn', 'Hay alertas esperando correo, pero EmailJS no está configurado',
+          'Llena Service ID, Template ID, Public Key y destinatario en Horarios → Alertas Email');
+      }
+      return;
+    }
+    this.warnedNotConfigured = false;
     this.emailBusy = true;
     try {
       const now = Date.now();
@@ -355,6 +369,13 @@ class MonitorEngine {
           await this.patchAlert(alert.id, { emailSent: true, lastEmailError: undefined });
         } else {
           const attempts = result.retryable ? alert.emailAttempts + 1 : EMAIL_MAX_ATTEMPTS;
+          if (result.retryable && attempts < EMAIL_MAX_ATTEMPTS) {
+            emailLog('warn', `Reintento ${attempts}/${EMAIL_MAX_ATTEMPTS - 1} programado`,
+              `en ${Math.round(EMAIL_RETRY_BASE_MS * 2 ** (attempts - 1) / 1000)} s`);
+          } else {
+            emailLog('error', 'No se reintentará automáticamente',
+              result.retryable ? 'Se agotaron los intentos' : 'Error de configuración: corrígela y usa "Reenviar email" en Alertas');
+          }
           await this.patchAlert(alert.id, {
             emailAttempts: attempts,
             nextEmailAttemptAt: Date.now() + EMAIL_RETRY_BASE_MS * 2 ** (attempts - 1),

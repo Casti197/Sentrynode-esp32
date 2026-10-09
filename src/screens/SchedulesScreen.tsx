@@ -23,7 +23,8 @@ import type { SecurityStore, Schedule, SecurityMode } from '@/store/useSecurityS
 import { sendTestEmail } from '@/services/emailService';
 import { fetchSnapshot, getStatus } from '@/services/esp32Api';
 import { isValidTime } from '@/services/schedule';
-import { EmailLogPanel } from '@/screens/EmailLogPanel';
+import { DeviceLogPanel, EmailLogPanel } from '@/screens/LogPanel';
+import { deviceLog } from '@/services/deviceLog';
 import { isGoogleSignInAvailable, signInWithGoogle, signOutGoogle } from '@/services/googleAuth';
 import { fixedGmailSender, hasFixedGmailAccount } from '@/services/gmailFixedAuth';
 import { emailLog } from '@/services/emailLog';
@@ -170,10 +171,16 @@ export default function SchedulesScreen({ store }: Props) {
   const handleTestEsp32 = async () => {
     setEsp32Test('Probando…');
     try {
+      const t0 = Date.now();
       const st = await getStatus(esp32Config);
+      const ms = Date.now() - t0;
       setEsp32Test(`✓ Conectado · ${st.net === 'sta' ? 'hotspot' : 'AP'} · RSSI ${st.rssi} dBm · modo ${st.mode} · ${st.fps.toFixed(1)} fps`);
+      deviceLog('success', 'Prueba de conexión OK',
+        `${st.ip} · ${st.net === 'sta' ? 'hotspot' : 'AP'} · RSSI ${st.rssi} dBm · ${st.fps.toFixed(1)} fps · ${ms} ms`);
     } catch (e: any) {
       setEsp32Test(`✗ ${e?.message ?? 'Error'}`);
+      deviceLog('error', 'Prueba de conexión falló',
+        `${esp32Config.demo ? 'ESP32 simulado' : `${esp32Config.ip}:${esp32Config.controlPort}`} · ${e?.message ?? 'Error'}`);
     }
   };
 
@@ -547,6 +554,8 @@ export default function SchedulesScreen({ store }: Props) {
                 ))}
               </View>
             </View>
+
+            <DeviceLogPanel />
           </View>
         )}
       </ScrollView>

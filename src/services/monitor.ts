@@ -26,6 +26,7 @@ import {
   Esp32Error, fetchEvidence, fetchSnapshot, getStatus, setDeviceMode,
 } from './esp32Api';
 import { isEmailConfigured, sendAlertEmail } from './emailService';
+import { deviceLog } from './deviceLog';
 import { emailLog } from './emailLog';
 import { sendAlertNotification, sendIntrusionAlert } from './notificationService';
 import { computeEffectiveMode } from './schedule';
@@ -48,6 +49,26 @@ const MODE_LABEL: Record<SecurityMode, string> = {
   away: 'Fuera de Casa',
 };
 
+const RUNNER_LABEL: Record<MonitorSnapshot['runner'], string> = {
+  'foreground-service': 'servicio en segundo plano',
+  'in-app': 'app abierta',
+  stopped: 'detenido',
+};
+
+function signalLabel(rssi: number): string {
+  if (rssi >= -60) return 'excelente';
+  if (rssi >= -70) return 'buena';
+  if (rssi >= -80) return 'regular';
+  return 'débil';
+}
+
+function formatDuration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  return m < 60 ? `${m} min ${s % 60} s` : `${Math.floor(m / 60)} h ${m % 60} min`;
+}
+
 type Listener = () => void;
 
 class MonitorEngine {
@@ -57,6 +78,9 @@ class MonitorEngine {
   private lastSeq: number | null = null;
   private lastUptime: number | null = null;
   private offlineSince: number | null = null;
+  /** Desde cuándo falla el sondeo (primer fallo), para medir cuánto duró el corte. */
+  private failingSince: number | null = null;
+  private connectedAt: number | null = null;
   private connectionLostAlerted = false;
   private emailBusy = false;
   private loaded: Promise<void> | null = null;
@@ -117,7 +141,12 @@ class MonitorEngine {
       patch.esp32Config.demo !== this.config.esp32Config.demo);
     this.config = { ...this.config, ...patch };
     if (ipChanged) {
+      const c = patch.esp32Config!;
+      deviceLog('info', 'Cambio de dispositivo',
+        c.demo ? 'ahora: ESP32 simulado (modo demo)' : `ahora: ${c.ip} (control :${c.controlPort}, video :${c.streamPort})`);
       // Otro dispositivo: su contador no tiene relación con el anterior
+      this.connectedAt = null;
+      this.failingSince = null;
       this.lastSeq = null;
       this.lastUptime = null;
       this.snapshot = { ...this.snapshot, status: null, connection: 'connecting' };
@@ -131,7 +160,12 @@ class MonitorEngine {
   async run(runner: MonitorSnapshot['runner'], shouldContinue: () => boolean): Promise<void> {
     await this.ensureLoaded();
     const myId = ++this.loopId;                // Una cadena nueva invalida a la anterior
+    this.connectedAt = null;
+    this.failingSince = null;
     this.setSnapshot({ runner, connection: 'connecting' });
+    this.runningLogged = true;
+    deviceLog('info', `Monitoreo iniciado (${RUNNER_LABEL[runner]})`,
+      `buscando ${this.targetLabel()} cada ${POLL_ONLINE_MS / 1000} s`);
 
     while (shouldContinue() && myId === this.loopId) {
       const delay = await this.tick();
@@ -142,11 +176,24 @@ class MonitorEngine {
       });
       this.wake = null;
     }
-    if (myId === this.loopId) this.setSnapshot({ runner: 'stopped', connection: 'idle' });
+    if (myId === this.loopId) {
+      this.setSnapshot({ runner: 'stopped', connection: 'idle' });
+      this.logStopped();
+    }
+  }
+
+  private runningLogged = false;
+  private logStopped(): void {
+    if (!this.runningLogged) return;
+    this.runningLogged = false;
+    deviceLog('info', 'Monitoreo detenido', this.connectedAt
+      ? `estuvo conectado ${formatDuration(Date.now() - this.connectedAt)}` : undefined);
+    this.connectedAt = null;
   }
 
   /** Detiene la cadena actual y cancela la petición en curso. */
   stop(): void {
+    this.logStopped();
     this.loopId++;
     this.abort?.abort();
     if (this.timer) clearTimeout(this.timer);
@@ -210,15 +257,16 @@ class MonitorEngine {
 
     // ── Conectado ──
     const latencyMs = Date.now() - t0;
-    if (this.offlineSince && this.connectionLostAlerted) {
-      console.log('[monitor] Cámara de vuelta en línea');
-    }
+    const justConnected = this.snapshot.connection !== 'online';
+    if (justConnected) this.logConnected(status, latencyMs);
+    this.failingSince = null;
     this.offlineSince = null;
     this.connectionLostAlerted = false;
 
     // ¿Se reinició el ESP32? Su uptime bajó → su contador volvió a 0.
     if (this.lastUptime !== null && status.uptime_ms < this.lastUptime) {
-      console.log('[monitor] El ESP32 se reinició; reiniciando contador');
+      deviceLog('warn', 'El ESP32 se reinició',
+        `encendido hace ${formatDuration(status.uptime_ms)}; contador de movimiento reiniciado`);
       this.lastSeq = 0;
     }
     this.lastUptime = status.uptime_ms;
@@ -233,8 +281,13 @@ class MonitorEngine {
     if (status.mode !== effective) {
       try {
         await setDeviceMode(cfg.esp32Config, effective);
+        deviceLog('success', `Modo sincronizado: ${MODE_LABEL[effective]}`,
+          `el ESP32 estaba en ${MODE_LABEL[status.mode]}`);
         status = { ...status, mode: effective, armed: effective !== 'disarmed' };
-      } catch { /* se reintenta en el próximo ciclo */ }
+      } catch (e) {
+        deviceLog('warn', `No se pudo enviar el modo ${MODE_LABEL[effective]}`,
+          `${e instanceof Esp32Error ? e.message : String(e)} · se reintenta en el próximo ciclo`);
+      }
     }
 
     this.setSnapshot({
@@ -257,6 +310,12 @@ class MonitorEngine {
     const failures = this.snapshot.consecutiveFailures + 1;
     const message = e instanceof Esp32Error ? e.message : String(e);
     const offline = failures >= OFFLINE_AFTER_FAILURES;
+    this.failingSince ??= Date.now();
+    const prev = this.snapshot.connection;
+    if (offline && prev !== 'offline') {
+      deviceLog('error', prev === 'online' ? 'Se perdió la conexión con el ESP32' : 'No se encuentra el ESP32',
+        `${this.targetLabel()} · ${message}`);
+    }
     this.setSnapshot({
       consecutiveFailures: failures,
       lastError: message,
@@ -280,6 +339,42 @@ class MonitorEngine {
     return Math.min(POLL_ONLINE_MS * 2 ** Math.max(0, failures - 1), POLL_MAX_BACKOFF_MS);
   }
 
+  private targetLabel(): string {
+    const c = this.config?.esp32Config;
+    if (!c) return 'ESP32';
+    return c.demo ? 'ESP32 simulado' : `${c.ip}:${c.controlPort}`;
+  }
+
+  /** Registro de la transición a "en línea" (primera conexión o reconexión). */
+  private logConnected(status: DeviceStatus, latencyMs: number): void {
+    const wasConnected = this.connectedAt !== null;
+    const outage = this.failingSince ? Date.now() - this.failingSince : null;
+    this.connectedAt = Date.now();
+
+    const net = status.net === 'ap' ? 'red propia del ESP32 (AP)' : 'WiFi/hotspot (STA)';
+    const detail = [
+      `${status.device || 'ESP32'} fw ${status.fw} en ${status.ip}`,
+      net,
+      `señal ${status.rssi} dBm (${signalLabel(status.rssi)})`,
+      `modo ${MODE_LABEL[status.mode]}`,
+      `${latencyMs} ms`,
+      status.time_synced ? 'hora NTP ok' : 'sin hora NTP',
+    ].join(' · ');
+
+    if (wasConnected || outage !== null) {
+      deviceLog('success', `Reconectado al ESP32${outage !== null ? ` tras ${formatDuration(outage)} sin respuesta` : ''}`, detail);
+    } else {
+      deviceLog('success', 'Conectado al ESP32', detail);
+    }
+    if (status.rssi < -80) {
+      deviceLog('warn', 'Señal WiFi débil', 'acerca la cámara al hotspot: pueden fallar el video y las alertas');
+    }
+    if (status.net === 'ap') {
+      deviceLog('warn', 'El ESP32 está en modo AP (no encontró el hotspot)',
+        'en esta red el teléfono no tiene internet: los correos esperarán en cola');
+    }
+  }
+
   private async onIntrusion(status: DeviceStatus, newEvents: number): Promise<void> {
     // Hora exacta del evento: reloj NTP del ESP32; si no hay, se reconstruye con su uptime
     const when = status.motion_epoch > 0
@@ -290,7 +385,8 @@ class MonitorEngine {
     try {
       image = await fetchEvidence(this.config!.esp32Config);
     } catch (e) {
-      console.warn('[monitor] No se pudo descargar la evidencia:', e);
+      deviceLog('warn', 'No se pudo descargar la foto de evidencia',
+        e instanceof Esp32Error ? e.message : String(e));
     }
 
     const zones = status.total_blocks ? ` (${status.changed_blocks}/${status.total_blocks} zonas)` : '';

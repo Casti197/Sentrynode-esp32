@@ -56,6 +56,7 @@
 #include "esp_camera.h"
 #include "img_converters.h"
 #include "esp_http_server.h"
+#include "lwip/sockets.h"
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 
@@ -148,6 +149,15 @@ static volatile time_t   motionEpoch      = 0;  // Hora real del último evento 
 static volatile uint16_t lastChangedBlocks = 0;
 static volatile float    cameraFps        = 0;
 static std::atomic<uint8_t> streamClients{0};  // Lo modifican varias conexiones
+
+// Registro de la app: se considera "conectada" mientras consulte /status.
+// La app sondea cada ~1.5 s; 10 s sin consultas = la app se fue.
+#define APP_TIMEOUT_MS 10000
+static portMUX_TYPE appMux = portMUX_INITIALIZER_UNLOCKED;
+static char     appIp[46] = "";
+static uint32_t appLastSeenMs = 0;
+static uint32_t appConnectedMs = 0;
+static bool     appActive = false;
 static volatile bool     flashOn          = false;
 static volatile bool     sirenOn          = false;
 static bool              apFallback       = false;
@@ -393,7 +403,67 @@ static esp_err_t sendError(httpd_req_t* req, const char* status, const char* msg
   return sendJson(req, json);
 }
 
+// IP del cliente de una petición (las conexiones IPv4 llegan como IPv6 "mapeadas")
+static void peerIp(httpd_req_t* req, char* out, size_t n) {
+  struct sockaddr_storage addr;
+  socklen_t len = sizeof(addr);
+  strlcpy(out, "?", n);
+  if (getpeername(httpd_req_to_sockfd(req), (struct sockaddr*)&addr, &len) != 0) return;
+  if (addr.ss_family == AF_INET) {
+    inet_ntop(AF_INET, &((struct sockaddr_in*)&addr)->sin_addr, out, n);
+  } else if (addr.ss_family == AF_INET6) {
+    struct sockaddr_in6* a6 = (struct sockaddr_in6*)&addr;
+    inet_ntop(AF_INET, &a6->sin6_addr.un.u32_addr[3], out, n);   // ::ffff:a.b.c.d → a.b.c.d
+  }
+}
+
+// Llamado en cada GET /status: detecta cuándo la app empieza (o vuelve) a consultar
+static void trackAppPoll(httpd_req_t* req) {
+  char ip[46];
+  peerIp(req, ip, sizeof(ip));
+  uint32_t now = millis();
+  bool wasActive, sameIp, seenBefore;
+  uint32_t silentMs;
+  portENTER_CRITICAL(&appMux);
+  wasActive = appActive;
+  seenBefore = appLastSeenMs != 0;
+  sameIp = strcmp(ip, appIp) == 0;
+  silentMs = now - appLastSeenMs;
+  appLastSeenMs = now;
+  if (!wasActive || !sameIp) { strlcpy(appIp, ip, sizeof(appIp)); appConnectedMs = now; }
+  appActive = true;
+  portEXIT_CRITICAL(&appMux);
+
+  if (!wasActive && sameIp && seenBefore) {
+    Serial.printf("[APP] App reconectada desde %s tras %u s sin consultas\n", ip, silentMs / 1000);
+  } else if (!wasActive || !sameIp) {
+    Serial.printf("[APP] App conectada desde %s (consulta /status cada ~1.5 s) · modo %s\n",
+                  ip, MODE_NAMES[securityMode]);
+  }
+}
+
+// Llamado desde loop(): avisa una vez cuando la app deja de consultar
+static void checkAppTimeout() {
+  char ip[46];
+  uint32_t connectedFor = 0;
+  bool lost = false;
+  portENTER_CRITICAL(&appMux);
+  if (appActive && millis() - appLastSeenMs > APP_TIMEOUT_MS) {
+    appActive = false;
+    lost = true;
+    connectedFor = appLastSeenMs - appConnectedMs;
+    strlcpy(ip, appIp, sizeof(ip));
+  }
+  portEXIT_CRITICAL(&appMux);
+  if (lost) {
+    Serial.printf("[APP] La app %s dejó de consultar hace %d s (estuvo conectada %u s) — "
+                  "¿se cerró, se bloqueó el teléfono o cambió de red?\n",
+                  ip, APP_TIMEOUT_MS / 1000, connectedFor / 1000);
+  }
+}
+
 esp_err_t statusHandler(httpd_req_t* req) {
+  trackAppPoll(req);
   time_t now = time(nullptr);
   char json[640];
   snprintf(json, sizeof(json),
@@ -533,7 +603,10 @@ esp_err_t streamHandler(httpd_req_t* req) {
   cors(req);
   httpd_resp_set_hdr(req, "X-Framerate", "15");
   streamClients++;
-  Serial.println("[STREAM] Cliente conectado");
+  char ip[46];
+  peerIp(req, ip, sizeof(ip));
+  uint32_t startedMs = millis();
+  Serial.printf("[STREAM] Video abierto por %s (clientes: %u)\n", ip, streamClients.load());
 
   esp_err_t res = ESP_OK;
   while (res == ESP_OK) {
@@ -552,7 +625,8 @@ esp_err_t streamHandler(httpd_req_t* req) {
   }
   free(buf);
   streamClients--;
-  Serial.println("[STREAM] Cliente desconectado");
+  Serial.printf("[STREAM] Video cerrado por %s tras %u s (clientes: %u)\n",
+                ip, (millis() - startedMs) / 1000, streamClients.load());
   return res;
 }
 
@@ -600,6 +674,14 @@ void onWifiEvent(WiFiEvent_t event) {
       break;
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
       Serial.println("[WIFI] Desconectado del hotspot — reintentando…");
+      break;
+    case ARDUINO_EVENT_WIFI_AP_STACONNECTED:     // Modo AP de rescate
+      Serial.printf("[AP] Un teléfono se unió a la red del ESP32 (conectados: %d)\n",
+                    WiFi.softAPgetStationNum());
+      break;
+    case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
+      Serial.printf("[AP] Un teléfono salió de la red del ESP32 (conectados: %d)\n",
+                    WiFi.softAPgetStationNum());
       break;
     default: break;
   }
@@ -707,5 +789,6 @@ void loop() {
       disconnectedSince = millis();
     }
   }
+  checkAppTimeout();
   delay(100);
 }

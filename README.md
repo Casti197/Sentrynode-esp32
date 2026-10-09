@@ -155,6 +155,35 @@ Google en el teléfono. Si existe `.env.local`, tiene prioridad sobre el inicio 
 > (el Registro de envíos dirá `invalid_grant`). Para que no venza: *Google Auth Platform → Público →
 > Publicar app*. O vuelve a generarlo el día antes de la sustentación.
 
+### 6. Registros de conexión (app ↔ ESP32)
+
+Los dos lados registran la conexión, así se ve en vivo quién perdió a quién.
+
+**App** (terminal de `npx expo start` con prefijo `[ESP32]` y panel *Horarios → ESP32 → Registro de conexión*):
+
+| Evento | Ejemplo |
+|---|---|
+| Inicio / fin del monitoreo | `Monitoreo iniciado (servicio en segundo plano)` |
+| Primera conexión | `Conectado al ESP32 — sentrynode fw 2 en 10.x.x.x · WiFi/hotspot (STA) · señal -58 dBm (excelente) · modo Desarmado · 45 ms · hora NTP ok` |
+| Pérdida (tras 2 fallos seguidos) | `Se perdió la conexión con el ESP32 — 10.x.x.x:80 · Tiempo de espera agotado` |
+| Reconexión | `Reconectado al ESP32 tras 12 s sin respuesta` |
+| Reinicio de la placa | `El ESP32 se reinició — encendido hace 3 s` |
+| Sincronización de modo | `Modo sincronizado: Fuera de Casa — el ESP32 estaba en Desarmado` |
+| Video | `Video en vivo`, `Video interrumpido`, `Video recuperado tras 4 s` |
+| Avisos | señal débil (< -80 dBm), ESP32 en modo AP (sin internet para correos) |
+
+Solo se registran **transiciones**, no cada sondeo, para que el registro no se llene.
+
+**ESP32** (Monitor Serie a 115200):
+
+```
+[APP] App conectada desde 10.x.x.x (consulta /status cada ~1.5 s) · modo disarmed
+[STREAM] Video abierto por 10.x.x.x (clientes: 1)
+[APP] La app 10.x.x.x dejó de consultar hace 10 s (estuvo conectada 85 s) — ¿se cerró, …?
+[APP] App reconectada desde 10.x.x.x tras 14 s sin consultas
+[AP] Un teléfono se unió a la red del ESP32 (conectados: 1)     ← solo en modo AP de rescate
+```
+
 ---
 
 # Guía para la defensa técnica

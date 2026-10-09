@@ -27,6 +27,7 @@ import { StatusBar } from 'expo-status-bar';
 import type { SecurityStore } from '@/store/useSecurityStore';
 import { setFlash, setSiren, streamUrl as buildStreamUrl } from '@/services/esp32Api';
 import { monitor } from '@/services/monitor';
+import { deviceLog } from '@/services/deviceLog';
 import { getDemoState, setDemoOnline, simulateIntrusion, subscribeDemo } from '@/services/demoDevice';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -283,17 +284,41 @@ export default function StreamingScreen({ store }: Props) {
   const handleSetMode = useCallback((newMode: typeof mode) => { setMode(newMode); }, [setMode]);
 
   // ── Mensajes del WebView ────────────────────────────────────────────────────
+  // Registro del video: solo transiciones (no cada reintento) para no llenar el log
+  const streamLiveRef = useRef(false);
+  const streamFailingSince = useRef<number | null>(null);
+
+  const onStreamFailure = useCallback((reason: string) => {
+    if (streamLiveRef.current || streamFailingSince.current === null) {
+      deviceLog(streamLiveRef.current ? 'warn' : 'error',
+        streamLiveRef.current ? 'Video interrumpido' : 'No se pudo abrir el video',
+        `${streamUrl} · ${reason} · reintentando con espera creciente (1 s → 15 s)`);
+    }
+    streamLiveRef.current = false;
+    streamFailingSince.current ??= Date.now();
+    scheduleReconnect();
+  }, [scheduleReconnect, streamUrl]);
+
   const handleWebViewMessage = useCallback((event: { nativeEvent: { data: string } }) => {
     const msg = event.nativeEvent.data;
     if (msg === 'STREAM_LIVE') {
+      if (!streamLiveRef.current) {
+        const since = streamFailingSince.current;
+        deviceLog('success', since ? `Video recuperado tras ${Math.round((Date.now() - since) / 1000)} s` : 'Video en vivo',
+          demo ? 'cámara simulada' : `MJPEG ${streamUrl}`);
+      }
+      streamLiveRef.current = true;
+      streamFailingSince.current = null;
       attemptRef.current = 0;
       setConnState('live');
     } else if (msg === 'STREAM_ERROR') {
-      scheduleReconnect();
+      onStreamFailure('el stream dejó de enviar cuadros');
     }
-  }, [scheduleReconnect]);
+  }, [onStreamFailure, demo, streamUrl]);
 
-  const handleWebViewError = useCallback(() => scheduleReconnect(), [scheduleReconnect]);
+  const handleWebViewError = useCallback(
+    (e: { nativeEvent: { description?: string } }) => onStreamFailure(e.nativeEvent.description || 'error del WebView'),
+    [onStreamFailure]);
 
   const runnerLabel = live.runner === 'foreground-service' ? 'SVC: FOREGROUND ACTIVE'
     : live.runner === 'in-app' ? 'VIGILANDO (APP ABIERTA)' : 'MONITOR DETENIDO';

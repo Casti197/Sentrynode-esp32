@@ -23,6 +23,8 @@ import { sendTestEmail } from '@/services/emailService';
 import { fetchSnapshot, getStatus } from '@/services/esp32Api';
 import { isValidTime } from '@/services/schedule';
 import { EmailLogPanel } from '@/screens/EmailLogPanel';
+import { isGoogleSignInAvailable, signInWithGoogle, signOutGoogle } from '@/services/googleAuth';
+import { emailLog } from '@/services/emailLog';
 
 interface Props {
   store: SecurityStore;
@@ -132,6 +134,33 @@ export default function SchedulesScreen({ store }: Props) {
     if (!result.ok) Alert.alert('No se envió', result.error);
     else if (!photo) Alert.alert('Enviado sin foto', 'El correo salió, pero la cámara no respondió para adjuntar la foto.');
     setTimeout(() => setTestEmailStatus('idle'), 3000);
+  };
+
+  // ── Gmail API: iniciar / cerrar sesión con Google ──────────────────────────
+
+  const [googleBusy, setGoogleBusy] = useState(false);
+  const googleAvailable = isGoogleSignInAvailable();
+
+  const handleGoogleSignIn = async () => {
+    setGoogleBusy(true);
+    try {
+      const email = await signInWithGoogle();
+      if (email) {
+        await updateEmailConfig({ gmailAccount: email, provider: 'gmail' });
+        emailLog('success', `Sesión de Google iniciada: ${email}`, 'Permiso gmail.send concedido');
+      }
+    } catch (e: any) {
+      emailLog('error', 'No se pudo iniciar sesión con Google', e?.message ?? String(e));
+      Alert.alert('Google', e?.message ?? String(e));
+    } finally {
+      setGoogleBusy(false);
+    }
+  };
+
+  const handleGoogleSignOut = async () => {
+    await signOutGoogle();
+    await updateEmailConfig({ gmailAccount: '' });
+    emailLog('info', 'Sesión de Google cerrada');
   };
 
   // ── Test ESP32 ─────────────────────────────────────────────────────────────
@@ -316,23 +345,85 @@ export default function SchedulesScreen({ store }: Props) {
         {activeTab === 'email' && (
           <View className="gap-space-sm">
             <View className="bg-surface-container-low rounded-xl p-space-md shadow-sm">
-              <Text className="font-label-caps text-label-caps text-outline uppercase tracking-wider mb-space-md">
-                Configuración EmailJS
-              </Text>
-              <Text className="font-body-sm text-body-sm text-on-surface-variant mb-space-md leading-relaxed">
-                1) En emailjs.com → Account → Security, activa “Allow EmailJS API for non-browser applications”.{'\n'}
-                2) En el template usa {'{{to_email}}'} como destinatario y las variables alert_timestamp, alert_type, alert_description, security_mode, esp32_ip.{'\n'}
-                3) Pestaña Attachments del template → Variable Attachment con parámetro “snapshot” (image/jpeg).
+              <Text className="font-label-caps text-label-caps text-outline uppercase tracking-wider mb-space-sm">
+                Envío de alertas por correo
               </Text>
 
-              {[
-                { key: 'serviceId', label: 'Service ID', placeholder: 'service_xxxxxxx' },
-                { key: 'templateId', label: 'Template ID', placeholder: 'template_xxxxxxx' },
-                { key: 'publicKey', label: 'Public Key', placeholder: 'xxxxxxxxxxxxxxxxxxxxx' },
-                { key: 'privateKey', label: 'Private Key (opcional)', placeholder: 'solo si activaste strict mode' },
-                { key: 'recipientEmail', label: 'Email Destinatario', placeholder: 'propietario@email.com' },
-                { key: 'senderName', label: 'Nombre Remitente', placeholder: 'SentryNode' },
-              ].map(({ key, label, placeholder }) => (
+              {/* Proveedor */}
+              <View className="flex-row bg-surface-container-lowest p-1 rounded-xl mb-space-md">
+                {(['gmail', 'emailjs'] as const).map(p => {
+                  const active = emailConfig.provider === p;
+                  return (
+                    <TouchableOpacity
+                      key={p}
+                      onPress={() => updateEmailConfig({ provider: p })}
+                      className={`flex-1 py-2.5 rounded-lg items-center ${active ? 'bg-primary' : ''}`}
+                    >
+                      <Text className={`font-label-caps text-label-caps uppercase ${active ? 'text-on-primary font-bold' : 'text-on-surface-variant'}`}>
+                        {p === 'gmail' ? 'Gmail API' : 'EmailJS (respaldo)'}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {emailConfig.provider === 'gmail' ? (
+                <View className="mb-space-md">
+                  <Text className="font-body-sm text-body-sm text-on-surface-variant mb-space-sm leading-relaxed">
+                    La app envía el correo desde tu cuenta de Gmail (OAuth 2.0, solo permiso de enviar). No usa plantillas externas.
+                  </Text>
+                  {!googleAvailable && (
+                    <Text className="font-body-sm text-body-sm text-error mb-space-sm">
+                      Estás en Expo Go: Gmail API necesita un development build (npx expo run:android). Mientras tanto usa EmailJS.
+                    </Text>
+                  )}
+                  {emailConfig.gmailAccount ? (
+                    <View className="flex-row items-center justify-between bg-surface-container-highest rounded-xl p-space-sm">
+                      <View className="flex-row items-center gap-space-xs flex-1">
+                        <MaterialIcons name="verified-user" size={18} color="#4edea3" />
+                        <Text className="font-telemetry-sm text-telemetry-sm text-on-surface flex-1" numberOfLines={1}>
+                          {emailConfig.gmailAccount}
+                        </Text>
+                      </View>
+                      <TouchableOpacity onPress={handleGoogleSignOut} className="px-space-sm py-1">
+                        <Text className="font-label-caps text-label-caps text-error uppercase">Cerrar sesión</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <TouchableOpacity
+                      onPress={handleGoogleSignIn}
+                      disabled={googleBusy || !googleAvailable}
+                      className={`rounded-xl py-space-sm items-center flex-row justify-center gap-space-sm ${googleAvailable ? 'bg-primary/20' : 'bg-surface-container-highest'}`}
+                    >
+                      <MaterialCommunityIcons name="google" size={18} color={googleAvailable ? '#4cd7f6' : '#869397'} />
+                      <Text className={`font-label-caps text-label-caps uppercase font-bold ${googleAvailable ? 'text-primary' : 'text-outline'}`}>
+                        {googleBusy ? 'Abriendo Google…' : 'Iniciar sesión con Google'}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              ) : (
+                <Text className="font-body-sm text-body-sm text-on-surface-variant mb-space-md leading-relaxed">
+                  1) En emailjs.com → Account → Security, activa “Allow EmailJS API for non-browser applications”.{'\n'}
+                  2) En el template usa {'{{to_email}}'} como destinatario y las variables alert_timestamp, alert_type, alert_description, security_mode, esp32_ip.{'\n'}
+                  3) Pestaña Attachments del template → Variable Attachment con parámetro “snapshot” (image/jpeg).
+                </Text>
+              )}
+
+              {(emailConfig.provider === 'gmail'
+                ? [
+                    { key: 'recipientEmail', label: 'Email Destinatario', placeholder: 'propietario@email.com' },
+                    { key: 'senderName', label: 'Nombre Remitente', placeholder: 'SentryNode' },
+                  ]
+                : [
+                    { key: 'serviceId', label: 'Service ID', placeholder: 'service_xxxxxxx' },
+                    { key: 'templateId', label: 'Template ID', placeholder: 'template_xxxxxxx' },
+                    { key: 'publicKey', label: 'Public Key', placeholder: 'xxxxxxxxxxxxxxxxxxxxx' },
+                    { key: 'privateKey', label: 'Private Key (opcional)', placeholder: 'solo si activaste strict mode' },
+                    { key: 'recipientEmail', label: 'Email Destinatario', placeholder: 'propietario@email.com' },
+                    { key: 'senderName', label: 'Nombre Remitente', placeholder: 'SentryNode' },
+                  ]
+              ).map(({ key, label, placeholder }) => (
                 <View key={key} className="mb-space-sm">
                   <Text className="font-label-caps text-label-caps text-on-surface-variant uppercase mb-1">
                     {label}

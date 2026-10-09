@@ -18,7 +18,7 @@ horarias y envía un correo con la foto del intruso.
 │   (react-native-background-actions)          │        │          └─────────────────────────────────────────┘
 │        │ HTTPS (datos móviles)               │        │
 │        ▼                                     │        │
-│   EmailJS API ──▶ correo con intruso.jpg     │        │
+│   Gmail API ──▶ correo con intruso.jpg       │        │
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -31,7 +31,8 @@ horarias y envía un correo con la foto del intruso.
 | `src/services/foregroundService.ts` | Foreground Service de Android (tipo `connectedDevice`) que ejecuta el motor |
 | `src/services/esp32Api.ts` | Cliente HTTP: timeouts, errores tipados, reintentos solo de fallas transitorias |
 | `src/services/schedule.ts` | Franjas horarias (incluye las que cruzan medianoche) y regla manual vs. horario |
-| `src/services/emailService.ts` | Correo vía API REST de EmailJS con la foto adjunta |
+| `src/services/emailService.ts` | Correo con la foto adjunta: Gmail API (principal) o EmailJS (respaldo) |
+| `src/services/googleAuth.ts` · `gmailService.ts` | Inicio de sesión OAuth con Google y armado del mensaje MIME para Gmail |
 | `src/services/storage.ts` | Persistencia (AsyncStorage), compartida por UI y motor |
 | `src/store/useSecurityStore.ts` | Estado de la UI; se suscribe al motor |
 | `src/screens/*` | Streaming, Horarios/Configuración, Alertas |
@@ -57,13 +58,11 @@ Ajuste fino de la detección: `/status` devuelve `changed_blocks` (zonas con cam
 escena quieta debe estar en 0–1; si no, sube `BLOCK_DIFF`. Si no detecta a una persona, bájalo o
 baja `MIN_CHANGED_BLOCKS`.
 
-### 2. EmailJS (una sola vez)
+### 2. Correo de alerta
 
-1. Account → Security → activar **Allow EmailJS API for non-browser applications**.
-2. Template: destinatario `{{to_email}}`; variables `{{alert_timestamp}}`, `{{alert_type}}`,
-   `{{alert_description}}`, `{{security_mode}}`, `{{esp32_ip}}`.
-3. Template → **Attachments** → *Variable Attachment*, parámetro `snapshot`, nombre `intruso.jpg`, tipo `image/jpeg`.
-4. En la app: Horarios → Alertas Email → llenar los IDs → **Enviar email de prueba** (lleva una foto actual).
+Dos opciones (se elige en Horarios → Alertas Email):
+- **Gmail API** (recomendado): envía desde tu Gmail. Configuración en la sección 5.
+- **EmailJS** (respaldo, sirve en Expo Go): sección 6.
 
 ### 3. App
 
@@ -85,7 +84,7 @@ Luego, en la app: Horarios → ESP32 → escribe la IP del monitor serie → **P
 ### 4. Modo demo (practicar sin la placa)
 
 La app trae un ESP32 simulado. El video, la cámara y la foto son simulados; el motor de
-vigilancia, las alertas, los horarios y el **correo de EmailJS son los reales**.
+vigilancia, las alertas, los horarios y el **correo (Gmail API o EmailJS) son los reales**.
 
 1. `npx expo start` y abre la app en Expo Go (no hace falta estar en el hotspot del ESP32,
    pero el teléfono sí necesita internet para el correo).
@@ -100,7 +99,38 @@ vigilancia, las alertas, los horarios y el **correo de EmailJS son los reales**.
    - **Reconectar cámara** → la app la detecta sola y el video vuelve.
    - Desarmar a mano en medio de una franja horaria → queda desarmado hasta que termine la franja.
 
-### 5. Plantilla de EmailJS (paso a paso)
+### 5. Correo con Gmail API (recomendado)
+
+La app inicia sesión con tu cuenta de Google y envía el correo **desde tu Gmail** con
+`users.messages.send`, con la foto adjunta. Solo pide el permiso `gmail.send` (enviar, no leer).
+Necesita un **development build**; en Expo Go usa EmailJS (sección 6).
+
+**En Google Cloud (una vez, ~10 min):**
+1. [console.cloud.google.com](https://console.cloud.google.com) → crear proyecto **SentryNode**.
+2. *APIs y servicios → Biblioteca* → busca **Gmail API** → **Habilitar**.
+3. *APIs y servicios → Pantalla de consentimiento de OAuth* (Google Auth Platform):
+   tipo **Externo**, nombre "SentryNode", tu correo como soporte y contacto.
+   En *Acceso a datos* agrega el scope `.../auth/gmail.send`.
+   En *Público* → **Usuarios de prueba** → agrega `alejocastiblan2007@gmail.com`.
+4. *Credenciales* (Clientes) → **Crear ID de cliente de OAuth** → tipo **Android**:
+   - Nombre del paquete: `com.unisabana.sentrynode`
+   - Huella SHA-1 del certificado con el que se firma la app:
+     - con `npx expo run:android`:
+       `keytool -list -v -keystore android/app/debug.keystore -alias androiddebugkey -storepass android -keypass android`
+       (o `cd android; .\gradlew signingReport`)
+     - con EAS: `npx eas-cli@latest credentials` → Android → muestra el SHA-1.
+
+**En la app:** Horarios → Alertas Email → **Gmail API** → **Iniciar sesión con Google** → elige tu
+cuenta → acepta "Enviar correo en tu nombre" → **Enviar email de prueba**. Llega a tu bandeja y
+queda en *Enviados*.
+
+Errores comunes (el *Registro de envíos* los explica):
+- `DEVELOPER_ERROR` al iniciar sesión → el paquete o la SHA-1 del cliente Android no coinciden con la compilación.
+- `403 ... Gmail API has not been used` → falta habilitar la Gmail API (paso 2).
+- `403 access_denied` → tu cuenta no está como usuario de prueba (paso 3).
+- En modo *Prueba*, Google pide volver a iniciar sesión cada 7 días.
+
+### 6. EmailJS (respaldo, funciona en Expo Go)
 
 1. **Email Services** → Add New Service → Gmail → conecta tu cuenta. Copia el **Service ID**.
 2. **Email Templates** → Create New Template:
@@ -110,6 +140,7 @@ vigilancia, las alertas, los horarios y el **correo de EmailJS son los reales**.
    - Pestaña **Attachments** → Add Attachment → **Variable Attachment** → Parameter Name `snapshot`,
      Filename `intruso.jpg`, Content Type `image/jpeg`.
    - Guarda y copia el **Template ID**.
+   - En la app elige **EmailJS (respaldo)** en Horarios → Alertas Email.
 3. **Account → General**: copia la **Public Key**.
 4. **Account → Security**: activa **Allow EmailJS API for non-browser applications**
    (si no, la app recibe error 403).
@@ -134,7 +165,7 @@ El AP solo queda como modo de rescate.
 802.11 (Wi-Fi 2.4 GHz, WPA2) → IP → **TCP** → HTTP/1.1. El control es petición/respuesta con JSON
 (puerto 80). El video es **MJPEG**: una sola respuesta HTTP `multipart/x-mixed-replace` que nunca
 termina; cada parte es un JPEG completo, separada por un *boundary*. El correo sale por **HTTPS**
-(TLS sobre TCP) a la API de EmailJS. No usamos UDP: el video MJPEG necesita entrega confiable y en
+(TLS sobre TCP) a la Gmail API de Google. No usamos UDP: el video MJPEG necesita entrega confiable y en
 orden, porque un JPEG con un byte perdido no se decodifica.
 
 **¿Por qué MJPEG y no WebSockets?**
@@ -253,7 +284,7 @@ condiciones de carrera entre el servicio y la UI.
 | Comando falla por red | Hasta 3 intentos (300, 600 ms). Es seguro porque los comandos son **idempotentes** (fijan un valor, no lo alternan) |
 | Error 4xx o JSON inválido | No se reintenta: repetir no lo arregla. Se valida la forma del JSON |
 | Sin internet para el correo | La alerta queda en cola y se reintenta con backoff (20 s, 40 s, 80 s…, hasta 6 veces) |
-| EmailJS 4xx (mala config) | Se marca el error en la alerta y no se insiste; se puede reintentar a mano |
+| Gmail/EmailJS 4xx (mala config) | Se marca el error en la alerta y no se insiste; se puede reintentar a mano |
 | Hotspot se cae | El ESP32 reintenta solo (`setAutoReconnect`) y fuerza `reconnect()` cada 30 s |
 | ESP32 sin hotspot al arrancar | AP de rescate `SentryNode-XXXX` |
 | ESP32 se reinicia | Modo restaurado desde NVS; la app detecta el reinicio por `uptime_ms` |
@@ -268,13 +299,29 @@ al día en que empiezan.
 
 **¿Cómo es la evidencia y la marca de tiempo?**
 Al confirmar un evento, el ESP32 decodifica el frame a 320×240 y lo recomprime con más compresión
-(~10-15 KB) para que quepa en el límite de EmailJS. La app la descarga de `/motion.jpg` y la manda
+(~10-15 KB) para que el correo sea liviano (y quepa en el límite de EmailJS si se usa el respaldo). La app la descarga de `/motion.jpg` y la manda
 como adjunto (data URL base64). La hora sale del reloj del ESP32, sincronizado por **NTP**
 (UTC-5). Si no hay NTP, la app la reconstruye con `uptime_ms − motion_uptime_ms`.
+
+**¿Cómo envía el correo la app?** (Gmail API)
+1. El usuario inicia sesión con Google una vez. Es OAuth 2.0: Google muestra su propia pantalla,
+   el usuario acepta el permiso `gmail.send` y la app recibe un **access token** (vence en ~1 h).
+2. Para cada alerta la app arma un mensaje **MIME** `multipart/mixed`: una parte `text/html` con el
+   texto y otra `image/jpeg` con la foto en base64 (`intruso.jpg`).
+3. Hace `POST` a `gmail.googleapis.com/upload/gmail/v1/users/me/messages/send` con
+   `Authorization: Bearer <token>` y `Content-Type: message/rfc822`.
+4. Si Gmail responde **401**, el token venció: se descarta, se pide uno nuevo en silencio y se
+   reintenta una vez. **429/5xx** → cola con backoff. **403** → error de configuración (no se insiste).
+
+*Contrapregunta: ¿por qué no SMTP?* Un cliente SMTP necesita sockets TCP crudos (módulo nativo) y la
+contraseña o una "contraseña de aplicación" guardada en el teléfono. Con la API, la app nunca toca la
+contraseña y el permiso se limita a enviar.
 
 ## 6. Seguridad (limitaciones reconocidas)
 
 El Wi-Fi va cifrado con WPA2, pero dentro de la red el HTTP va sin cifrar y la API no tiene
-autenticación: cualquiera conectado al hotspot podría desarmar la cámara. Las claves de EmailJS
-están en el teléfono. Para producción: un token en cada petición (o HTTPS en el ESP32), las
-credenciales fuera del código y el correo enviado desde un backend propio.
+autenticación: cualquiera conectado al hotspot podría desarmar la cámara. El correo usa OAuth 2.0:
+la app nunca ve tu contraseña de Google, solo un token de corta duración con el permiso mínimo
+(`gmail.send`, enviar pero no leer), que Google renueva y que puedes revocar desde tu cuenta.
+Para producción: un token en cada petición al ESP32 (o HTTPS), y la app publicada (fuera del modo
+"Prueba" de OAuth, que obliga a reautenticar cada 7 días).

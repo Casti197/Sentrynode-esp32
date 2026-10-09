@@ -344,8 +344,10 @@ class MonitorEngine {
       const waiting = this.alerts.some(a => !a.emailSent && a.emailAttempts < EMAIL_MAX_ATTEMPTS);
       if (waiting && !this.warnedNotConfigured) {
         this.warnedNotConfigured = true;
-        emailLog('warn', 'Hay alertas esperando correo, pero EmailJS no está configurado',
-          'Llena Service ID, Template ID, Public Key y destinatario en Horarios → Alertas Email');
+        emailLog('warn', 'Hay alertas esperando correo, pero el envío no está configurado',
+          this.config.emailConfig.provider === 'gmail'
+            ? 'Inicia sesión con Google en Horarios → Alertas Email'
+            : 'Llena Service ID, Template ID, Public Key y destinatario en Horarios → Alertas Email');
       }
       return;
     }

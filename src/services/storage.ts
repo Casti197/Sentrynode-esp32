@@ -22,6 +22,8 @@ export const MAX_ALERTS = 50;
 export const MAX_ALERTS_WITH_IMAGE = 15; // Las fotos ocupan ~15 KB c/u en base64
 
 export const DEFAULT_EMAIL_CONFIG: EmailConfig = {
+  provider: 'gmail',
+  gmailAccount: '',
   serviceId: '',
   templateId: '',
   publicKey: '',
@@ -74,6 +76,15 @@ function parse<T>(raw: string | null | undefined, fallback: T): T {
   }
 }
 
+/** Un campo guardado vacío ('') no tapa el valor por defecto. */
+function withDefaults<T extends object>(defaults: T, saved: Partial<T>): T {
+  const out = { ...defaults };
+  for (const [k, v] of Object.entries(saved) as [keyof T, T[keyof T]][]) {
+    if (v !== '' && v !== null && v !== undefined) out[k] = v;
+  }
+  return out;
+}
+
 export async function loadConfig(): Promise<PersistedConfig> {
   const [s, o, e, d] = await AsyncStorage.multiGet([
     KEYS.SCHEDULES, KEYS.OVERRIDE, KEYS.EMAIL_CFG, KEYS.ESP32_CFG,
@@ -81,7 +92,7 @@ export async function loadConfig(): Promise<PersistedConfig> {
   return {
     schedules: parse(s[1], DEFAULT_SCHEDULES),
     override: parse<ManualOverride | null>(o[1], null),
-    emailConfig: { ...DEFAULT_EMAIL_CONFIG, ...parse(e[1], {}) },
+    emailConfig: withDefaults(DEFAULT_EMAIL_CONFIG, parse(e[1], {})),
     esp32Config: { ...DEFAULT_ESP32_CONFIG, ...parse(d[1], {}) },
   };
 }

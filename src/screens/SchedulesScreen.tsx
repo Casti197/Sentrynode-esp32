@@ -13,9 +13,10 @@
 
 import React, { useState } from 'react';
 import {
-  View, Text, TouchableOpacity, ScrollView, SafeAreaView,
+  View, Text, TouchableOpacity, ScrollView,
   Modal, TextInput, Switch, Alert,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import type { SecurityStore, Schedule, SecurityMode } from '@/store/useSecurityStore';

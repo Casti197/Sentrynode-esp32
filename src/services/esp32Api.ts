@@ -127,21 +127,29 @@ export function setSiren(cfg: Esp32Config, on: boolean): Promise<void> {
   });
 }
 
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Esp32Error('invalid', 'No se pudo leer la imagen'));
-    reader.readAsDataURL(blob);
-  });
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/** Bytes del JPEG → base64, sin pasar por el almacén de Blob nativo (más rápido). */
+function bytesToBase64(bytes: Uint8Array): string {
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const a = bytes[i], b = bytes[i + 1] ?? 0, c = bytes[i + 2] ?? 0;
+    const n = (a << 16) | (b << 8) | c;
+    out += B64[(n >> 18) & 63] + B64[(n >> 12) & 63] +
+      (i + 1 < bytes.length ? B64[(n >> 6) & 63] : '=') +
+      (i + 2 < bytes.length ? B64[n & 63] : '=');
+  }
+  return out;
 }
 
 async function fetchJpegDataUrl(url: string): Promise<string> {
   return withRetry(async () => {
     const res = await request(url, IMAGE_TIMEOUT_MS);
-    const dataUrl = await blobToDataUrl(await res.blob());
-    // Normalizar el MIME (algunos Android lo reportan como application/octet-stream)
-    return dataUrl.replace(/^data:[^;]*;/, 'data:image/jpeg;');
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) {
+      throw new Esp32Error('invalid', 'La cámara no devolvió un JPEG válido');
+    }
+    return `data:image/jpeg;base64,${bytesToBase64(bytes)}`;
   });
 }
 

@@ -51,7 +51,10 @@ export function emailLog(level: EmailLogLevel, message: string, detail?: string)
     detail,
   };
   const line = `[EMAIL] ${message}${detail ? ` — ${detail}` : ''}`;
-  if (level === 'error') console.error(line);
+  // Los fallos de envío son esperados y ya se manejan (cola + reintentos): se
+  // registran como advertencia. console.error abriría la pantalla roja de RN
+  // y haría parecer que la app se rompió.
+  if (level === 'error') console.warn(`✖ ${line}`);
   else if (level === 'warn') console.warn(line);
   else console.log(line);
 

@@ -14,10 +14,11 @@
 
 import React, { useEffect, useCallback, useState } from 'react';
 import {
-  View, Text, TouchableOpacity, ScrollView, SafeAreaView,
+  View, Text, TouchableOpacity, ScrollView,
   Alert, Image, Modal, Pressable,
 } from 'react-native';
 import { useIsFocused } from 'expo-router';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import type { SecurityStore, AlertEvent } from '@/store/useSecurityStore';

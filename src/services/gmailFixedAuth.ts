@@ -66,8 +66,10 @@ export async function getFixedAccessToken(): Promise<string> {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body,
     });
-  } catch {
-    throw new FixedTokenError('Sin internet para pedir el token a Google', true);
+  } catch (e) {
+    throw new FixedTokenError(
+      `Sin internet para pedir el token a Google (${String((e as Error)?.message ?? e)}). ` +
+      '¿El teléfono está en una red sin salida a internet, como el AP del ESP32?', true);
   }
 
   const text = await res.text();

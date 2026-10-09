@@ -130,6 +130,30 @@ Errores comunes (el *Registro de envíos* los explica):
 - `403 access_denied` → tu cuenta no está como usuario de prueba (paso 3).
 - En modo *Prueba*, Google pide volver a iniciar sesión cada 7 días.
 
+### 5b. Gmail sin iniciar sesión (cuenta fija) — lo que usamos
+
+Autorizas tu cuenta **una vez** desde el PC y la app envía siempre desde ella, sin pantallas de
+Google en el teléfono. Si existe `.env.local`, tiene prioridad sobre el inicio de sesión.
+
+1. **Google Cloud → Credenciales → Crear ID de cliente de OAuth → Aplicación web.**
+   En *URI de redireccionamiento autorizados* agrega `https://developers.google.com/oauthplayground`.
+   Copia el **ID de cliente** y el **Secreto del cliente**.
+2. Abre [OAuth 2.0 Playground](https://developers.google.com/oauthplayground):
+   - ⚙️ (arriba a la derecha) → marca **Use your own OAuth credentials** → pega ID y secreto.
+   - *Step 1*: en el cuadro "Input your own scopes" escribe
+     `https://www.googleapis.com/auth/gmail.send` → **Authorize APIs** → elige tu cuenta →
+     "Google no verificó esta app" → **Continuar** → acepta.
+   - *Step 2*: **Exchange authorization code for tokens** → copia el **Refresh token** (`1//…`).
+3. En `D:\proyectos\mobile_app`, copia `.env.example` como `.env.local` y llena los 4 valores.
+4. Reinicia Metro con `npx expo start --dev-client -c` (las variables se leen al empaquetar;
+   no hace falta un build nuevo, funciona también en Expo Go).
+5. En la app: Horarios → Alertas Email → **Gmail API** debe mostrar "Cuenta fija · sin inicio de
+   sesión" → **Enviar email de prueba**.
+
+> **Ojo:** con la app en estado *Prueba* en Google Cloud, el refresh token **vence a los 7 días**
+> (el Registro de envíos dirá `invalid_grant`). Para que no venza: *Google Auth Platform → Público →
+> Publicar app*. O vuelve a generarlo el día antes de la sustentación.
+
 ### 6. EmailJS (respaldo, funciona en Expo Go)
 
 1. **Email Services** → Add New Service → Gmail → conecta tu cuenta. Copia el **Service ID**.
@@ -310,6 +334,9 @@ como adjunto (data URL base64). La hora sale del reloj del ESP32, sincronizado p
    texto y otra `image/jpeg` con la foto en base64 (`intruso.jpg`).
 3. Hace `POST` a `gmail.googleapis.com/upload/gmail/v1/users/me/messages/send` con
    `Authorization: Bearer <token>` y `Content-Type: message/rfc822`.
+   Con la **cuenta fija**, el access token no viene de una pantalla de login sino de cambiar el
+   *refresh token* guardado: `POST oauth2.googleapis.com/token` con `grant_type=refresh_token`.
+   Se guarda en memoria hasta 1 minuto antes de que venza y se reutiliza entre correos.
 4. Si Gmail responde **401**, el token venció: se descarta, se pide uno nuevo en silencio y se
    reintenta una vez. **429/5xx** → cola con backoff. **403** → error de configuración (no se insiste).
 

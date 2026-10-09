@@ -24,6 +24,7 @@ import { fetchSnapshot, getStatus } from '@/services/esp32Api';
 import { isValidTime } from '@/services/schedule';
 import { EmailLogPanel } from '@/screens/EmailLogPanel';
 import { isGoogleSignInAvailable, signInWithGoogle, signOutGoogle } from '@/services/googleAuth';
+import { fixedGmailSender, hasFixedGmailAccount } from '@/services/gmailFixedAuth';
 import { emailLog } from '@/services/emailLog';
 
 interface Props {
@@ -372,6 +373,19 @@ export default function SchedulesScreen({ store }: Props) {
                   <Text className="font-body-sm text-body-sm text-on-surface-variant mb-space-sm leading-relaxed">
                     La app envía el correo desde tu cuenta de Gmail (OAuth 2.0, solo permiso de enviar). No usa plantillas externas.
                   </Text>
+                  {hasFixedGmailAccount() ? (
+                    <View className="flex-row items-center gap-space-xs bg-surface-container-highest rounded-xl p-space-sm">
+                      <MaterialIcons name="verified-user" size={18} color="#4edea3" />
+                      <View className="flex-1">
+                        <Text className="font-telemetry-sm text-telemetry-sm text-on-surface" numberOfLines={1}>
+                          {fixedGmailSender()}
+                        </Text>
+                        <Text className="font-label-caps text-label-caps text-secondary uppercase">
+                          Cuenta fija · sin inicio de sesión
+                        </Text>
+                      </View>
+                    </View>
+                  ) : (<>
                   {!googleAvailable && (
                     <Text className="font-body-sm text-body-sm text-error mb-space-sm">
                       Estás en Expo Go: Gmail API necesita un development build (npx expo run:android). Mientras tanto usa EmailJS.
@@ -401,6 +415,7 @@ export default function SchedulesScreen({ store }: Props) {
                       </Text>
                     </TouchableOpacity>
                   )}
+                  </>)}
                 </View>
               ) : (
                 <Text className="font-body-sm text-body-sm text-on-surface-variant mb-space-md leading-relaxed">

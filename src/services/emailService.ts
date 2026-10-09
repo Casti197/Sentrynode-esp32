@@ -18,6 +18,9 @@ import type { EmailConfig } from './types';
 import { emailLog, maskId } from './emailLog';
 import { sendGmail } from './gmailService';
 import { GoogleAuthError, getGmailAccessToken, invalidateGmailToken } from './googleAuth';
+import {
+  FixedTokenError, fixedGmailSender, getFixedAccessToken, hasFixedGmailAccount, invalidateFixedToken,
+} from './gmailFixedAuth';
 
 const EMAILJS_API = 'https://api.emailjs.com/api/v1.0/email/send';
 const EMAIL_TIMEOUT_MS = 15000;
@@ -37,7 +40,8 @@ export type EmailResult =
 
 function missingFields(c: EmailConfig): string[] {
   if (c.provider === 'gmail') {
-    return [!c.gmailAccount && 'inicio de sesión con Google', !c.recipientEmail && 'destinatario']
+    const hasAccount = hasFixedGmailAccount() || !!c.gmailAccount;
+    return [!hasAccount && 'cuenta de Gmail (.env.local o inicio de sesión)', !c.recipientEmail && 'destinatario']
       .filter(Boolean) as string[];
   }
   return [
@@ -66,14 +70,17 @@ export async function sendAlertEmail(config: EmailConfig, payload: AlertEmailPay
 // ─── Gmail API ────────────────────────────────────────────────────────────────
 
 async function sendWithGmail(config: EmailConfig, p: AlertEmailPayload, label: string): Promise<EmailResult> {
+  // Cuenta fija (.env.local) primero: no requiere iniciar sesión en el teléfono
+  const fixed = hasFixedGmailAccount();
+  const from = fixed ? fixedGmailSender() : config.gmailAccount;
   const photoKb = p.snapshotDataUrl ? Math.round(p.snapshotDataUrl.length / 1024) : 0;
   emailLog('info', `Enviando "${label}" por Gmail API a ${config.recipientEmail}`,
-    `desde ${config.gmailAccount} · ${photoKb ? `foto ${photoKb} KB` : 'sin foto'}`);
+    `desde ${from}${fixed ? ' (cuenta fija)' : ''} · ${photoKb ? `foto ${photoKb} KB` : 'sin foto'}`);
 
   const message = {
     to: config.recipientEmail,
     fromName: config.senderName || 'SentryNode',
-    fromEmail: config.gmailAccount,
+    fromEmail: from,
     subject: `🚨 SentryNode: ${label}`,
     html: renderAlertHtml(p, label),
     attachment: p.snapshotDataUrl ? { filename: 'intruso.jpg', dataUrl: p.snapshotDataUrl } : null,
@@ -84,12 +91,12 @@ async function sendWithGmail(config: EmailConfig, p: AlertEmailPayload, label: s
   for (let attempt = 1; attempt <= 2; attempt++) {
     let token: string;
     try {
-      token = await getGmailAccessToken();
+      token = fixed ? await getFixedAccessToken() : await getGmailAccessToken();
     } catch (e) {
-      const err = e as GoogleAuthError;
-      const retryable = err.code === 'other';
-      emailLog('error', `Falló "${label}": sin token de Google`, err.message);
-      return { ok: false, error: err.message, retryable };
+      const retryable = e instanceof FixedTokenError ? e.retryable : (e as GoogleAuthError).code === 'other';
+      const msg = (e as Error).message;
+      emailLog('error', `Falló "${label}": sin token de Google`, msg);
+      return { ok: false, error: msg, retryable };
     }
 
     const controller = new AbortController();
@@ -100,12 +107,13 @@ async function sendWithGmail(config: EmailConfig, p: AlertEmailPayload, label: s
       if (res.ok) {
         const id = /"id"\s*:\s*"([^"]+)"/.exec(res.body)?.[1];
         emailLog('success', `Enviado "${label}" ✓ por Gmail (HTTP ${res.status}, ${ms} ms)`,
-          `Mensaje ${id ?? ''} en "Enviados" de ${config.gmailAccount}`);
+          `Mensaje ${id ?? ''} en "Enviados" de ${from}`);
         return { ok: true };
       }
       if (res.status === 401 && attempt === 1) {
         emailLog('warn', 'Gmail respondió 401: token vencido, pidiendo uno nuevo…');
-        await invalidateGmailToken(token);
+        if (fixed) invalidateFixedToken();
+        else await invalidateGmailToken(token);
         continue;
       }
       const retryable = res.status === 429 || res.status >= 500;

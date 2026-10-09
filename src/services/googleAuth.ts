@@ -11,7 +11,7 @@
  *
  * Usa un módulo nativo (@react-native-google-signin/google-signin), así que
  * solo funciona en un development build. En Expo Go no existe y la app cae
- * a EmailJS.
+ * a la cuenta fija (.env.local), que no necesita módulo nativo.
  *
  * Requisito en Google Cloud: un cliente OAuth de tipo Android con el paquete
  * com.unisabana.sentrynode y la huella SHA-1 del certificado con el que se
@@ -80,7 +80,7 @@ export async function signInWithGoogle(): Promise<string | null> {
   const g = google();
   if (!g) {
     throw new GoogleAuthError('unavailable',
-      'Gmail API necesita un development build (npx expo run:android). En Expo Go usa EmailJS.');
+      'El inicio de sesión con Google necesita un development build. En Expo Go usa la cuenta fija (.env.local).');
   }
   ensureConfigured(g);
   try {

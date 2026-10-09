@@ -483,7 +483,7 @@ export default function StreamingScreen({ store }: Props) {
                 </Text>
               </View>
               <Text className="font-body-sm text-body-sm text-on-surface-variant mb-space-sm">
-                El video y la cámara son simulados; el motor de vigilancia, las alertas y el correo de EmailJS son los reales.
+                El video y la cámara son simulados; el motor de vigilancia, las alertas y el correo por Gmail son los reales.
               </Text>
               <View className="flex-row gap-space-xs">
                 <TouchableOpacity

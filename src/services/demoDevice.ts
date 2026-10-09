@@ -3,7 +3,7 @@
  *
  * Imita el firmware real: misma forma de /status, mismo contador motion_seq,
  * mismo comportamiento de /mode, /flash, /siren y /motion.jpg. Así el motor de
- * vigilancia (monitor.ts), las alertas y el correo de EmailJS funcionan
+ * vigilancia (monitor.ts), las alertas y el correo por Gmail funcionan
  * exactamente igual que con la placa, pero sin hardware.
  *
  * Igual que el firmware, solo cuenta un evento si el sistema está armado.

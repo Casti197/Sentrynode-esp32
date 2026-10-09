@@ -345,9 +345,7 @@ class MonitorEngine {
       if (waiting && !this.warnedNotConfigured) {
         this.warnedNotConfigured = true;
         emailLog('warn', 'Hay alertas esperando correo, pero el envío no está configurado',
-          this.config.emailConfig.provider === 'gmail'
-            ? 'Inicia sesión con Google en Horarios → Alertas Email'
-            : 'Llena Service ID, Template ID, Public Key y destinatario en Horarios → Alertas Email');
+          'Configura .env.local (cuenta fija) o inicia sesión con Google en Horarios → Alertas Email');
       }
       return;
     }

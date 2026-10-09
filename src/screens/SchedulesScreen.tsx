@@ -8,7 +8,7 @@
  *   - Add new schedules (start/end time, days of week, security mode)
  *   - Edit / delete existing schedules
  *   - Configure ESP32 connection parameters
- *   - Configure EmailJS credentials for alert emails
+ *   - Configure the Gmail alert recipient (Gmail API)
  */
 
 import React, { useState } from 'react';
@@ -147,7 +147,7 @@ export default function SchedulesScreen({ store }: Props) {
     try {
       const email = await signInWithGoogle();
       if (email) {
-        await updateEmailConfig({ gmailAccount: email, provider: 'gmail' });
+        await updateEmailConfig({ gmailAccount: email });
         emailLog('success', `Sesión de Google iniciada: ${email}`, 'Permiso gmail.send concedido');
       }
     } catch (e: any) {
@@ -350,26 +350,7 @@ export default function SchedulesScreen({ store }: Props) {
                 Envío de alertas por correo
               </Text>
 
-              {/* Proveedor */}
-              <View className="flex-row bg-surface-container-lowest p-1 rounded-xl mb-space-md">
-                {(['gmail', 'emailjs'] as const).map(p => {
-                  const active = emailConfig.provider === p;
-                  return (
-                    <TouchableOpacity
-                      key={p}
-                      onPress={() => updateEmailConfig({ provider: p })}
-                      className={`flex-1 py-2.5 rounded-lg items-center ${active ? 'bg-primary' : ''}`}
-                    >
-                      <Text className={`font-label-caps text-label-caps uppercase ${active ? 'text-on-primary font-bold' : 'text-on-surface-variant'}`}>
-                        {p === 'gmail' ? 'Gmail API' : 'EmailJS (respaldo)'}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-
-              {emailConfig.provider === 'gmail' ? (
-                <View className="mb-space-md">
+              <View className="mb-space-md">
                   <Text className="font-body-sm text-body-sm text-on-surface-variant mb-space-sm leading-relaxed">
                     La app envía el correo desde tu cuenta de Gmail (OAuth 2.0, solo permiso de enviar). No usa plantillas externas.
                   </Text>
@@ -388,7 +369,7 @@ export default function SchedulesScreen({ store }: Props) {
                   ) : (<>
                   {!googleAvailable && (
                     <Text className="font-body-sm text-body-sm text-error mb-space-sm">
-                      Estás en Expo Go: Gmail API necesita un development build (npx expo run:android). Mientras tanto usa EmailJS.
+                      Estás en Expo Go: el inicio de sesión con Google necesita un development build. Usa la cuenta fija (.env.local).
                     </Text>
                   )}
                   {emailConfig.gmailAccount ? (
@@ -416,29 +397,12 @@ export default function SchedulesScreen({ store }: Props) {
                     </TouchableOpacity>
                   )}
                   </>)}
-                </View>
-              ) : (
-                <Text className="font-body-sm text-body-sm text-on-surface-variant mb-space-md leading-relaxed">
-                  1) En emailjs.com → Account → Security, activa “Allow EmailJS API for non-browser applications”.{'\n'}
-                  2) En el template usa {'{{to_email}}'} como destinatario y las variables alert_timestamp, alert_type, alert_description, security_mode, esp32_ip.{'\n'}
-                  3) Pestaña Attachments del template → Variable Attachment con parámetro “snapshot” (image/jpeg).
-                </Text>
-              )}
+              </View>
 
-              {(emailConfig.provider === 'gmail'
-                ? [
-                    { key: 'recipientEmail', label: 'Email Destinatario', placeholder: 'propietario@email.com' },
-                    { key: 'senderName', label: 'Nombre Remitente', placeholder: 'SentryNode' },
-                  ]
-                : [
-                    { key: 'serviceId', label: 'Service ID', placeholder: 'service_xxxxxxx' },
-                    { key: 'templateId', label: 'Template ID', placeholder: 'template_xxxxxxx' },
-                    { key: 'publicKey', label: 'Public Key', placeholder: 'xxxxxxxxxxxxxxxxxxxxx' },
-                    { key: 'privateKey', label: 'Private Key (opcional)', placeholder: 'solo si activaste strict mode' },
-                    { key: 'recipientEmail', label: 'Email Destinatario', placeholder: 'propietario@email.com' },
-                    { key: 'senderName', label: 'Nombre Remitente', placeholder: 'SentryNode' },
-                  ]
-              ).map(({ key, label, placeholder }) => (
+              {[
+                { key: 'recipientEmail', label: 'Email Destinatario', placeholder: 'propietario@email.com' },
+                { key: 'senderName', label: 'Nombre Remitente', placeholder: 'SentryNode' },
+              ].map(({ key, label, placeholder }) => (
                 <View key={key} className="mb-space-sm">
                   <Text className="font-label-caps text-label-caps text-on-surface-variant uppercase mb-1">
                     {label}
@@ -450,7 +414,6 @@ export default function SchedulesScreen({ store }: Props) {
                     placeholderTextColor="#3d494c"
                     autoCapitalize="none"
                     autoCorrect={false}
-                    secureTextEntry={key === 'privateKey'}
                     className="bg-surface-container-highest rounded-lg px-space-sm py-space-sm text-on-surface font-telemetry-sm text-telemetry-sm"
                     style={{ color: '#dfe2ef', fontFamily: 'monospace' }}
                   />
@@ -505,7 +468,7 @@ export default function SchedulesScreen({ store }: Props) {
                 <View className="flex-1 mr-space-sm">
                   <Text className="font-headline-sm text-headline-sm text-on-surface">Modo demo</Text>
                   <Text className="font-body-sm text-body-sm text-on-surface-variant">
-                    Simula el ESP32 dentro de la app. El correo de EmailJS sí se envía de verdad.
+                    Simula el ESP32 dentro de la app. El correo por Gmail sí se envía de verdad.
                   </Text>
                 </View>
                 <Switch

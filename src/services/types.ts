@@ -39,15 +39,8 @@ export interface AlertEvent {
   lastEmailError?: string;
 }
 
-export type EmailProvider = 'gmail' | 'emailjs';
-
 export interface EmailConfig {
-  provider: EmailProvider; // 'gmail' = Gmail API con tu cuenta de Google; 'emailjs' = respaldo
-  gmailAccount: string;    // Cuenta de Google con la que se inició sesión ('' = ninguna)
-  serviceId: string;       // EmailJS service ID
-  templateId: string;      // EmailJS template ID
-  publicKey: string;       // EmailJS public key
-  privateKey: string;      // EmailJS private key (opcional, "accessToken")
+  gmailAccount: string;    // Cuenta de Google con la que se inició sesión ('' = ninguna; no aplica con cuenta fija)
   recipientEmail: string;
   senderName: string;
 }

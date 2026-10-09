@@ -5,7 +5,7 @@
  *  - la terminal de `npx expo start` (console.log con el prefijo [EMAIL]);
  *  - una lista persistente (últimos 100) que se ve en Horarios → Alertas Email.
  *
- * Nunca se guardan las claves de EmailJS, solo IDs abreviados.
+ * Nunca se guardan claves ni tokens, solo cuentas y resultados.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -73,10 +73,4 @@ export async function clearEmailLogs(): Promise<void> {
   entries = [];
   emit();
   await AsyncStorage.removeItem(KEY);
-}
-
-/** "service_abc123xyz" → "service_a…xyz": suficiente para verificar sin exponer la clave. */
-export function maskId(id: string): string {
-  if (!id) return '(vacío)';
-  return id.length <= 10 ? id : `${id.slice(0, 9)}…${id.slice(-3)}`;
 }

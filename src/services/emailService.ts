@@ -1,28 +1,24 @@
 /**
- * emailService — correo de alerta con foto adjunta.
+ * emailService — correo de alerta con foto adjunta, por la Gmail API.
  *
- * Dos proveedores, mismo contrato (sendAlertEmail → EmailResult):
+ * El correo sale DESDE tu Gmail con users.messages.send. El access token se
+ * obtiene de una de dos formas:
+ *  1. Cuenta fija (.env.local, lo normal): un refresh token autorizado una vez
+ *     se cambia por access tokens sin pedir nada en el teléfono.
+ *  2. Inicio de sesión con Google en el teléfono (development build).
+ * No hay plantillas externas: el HTML se arma aquí.
  *
- *  1. Gmail API (principal). La app inicia sesión con tu cuenta de Google
- *     (OAuth 2.0, permiso gmail.send) y envía el correo DESDE tu Gmail con
- *     users.messages.send. No hay plantillas externas: el HTML se arma aquí.
- *     Necesita development build (módulo nativo de Google Sign-In).
- *
- *  2. EmailJS (respaldo, funciona en Expo Go). Envía con una plantilla de
- *     emailjs.com; la foto va como "Variable Attachment" llamada `snapshot`.
- *
- * En ambos casos el teléfono necesita internet (por eso el ESP32 va en el
- * hotspot y no en su propio AP).
+ * El teléfono necesita internet (por eso el ESP32 va en el hotspot y no en su
+ * propio AP).
  */
 import type { EmailConfig } from './types';
-import { emailLog, maskId } from './emailLog';
+import { emailLog } from './emailLog';
 import { sendGmail } from './gmailService';
 import { GoogleAuthError, getGmailAccessToken, invalidateGmailToken } from './googleAuth';
 import {
   FixedTokenError, fixedGmailSender, getFixedAccessToken, hasFixedGmailAccount, invalidateFixedToken,
 } from './gmailFixedAuth';
 
-const EMAILJS_API = 'https://api.emailjs.com/api/v1.0/email/send';
 const EMAIL_TIMEOUT_MS = 15000;
 
 export interface AlertEmailPayload {
@@ -39,15 +35,9 @@ export type EmailResult =
   | { ok: false; error: string; retryable: boolean };
 
 function missingFields(c: EmailConfig): string[] {
-  if (c.provider === 'gmail') {
-    const hasAccount = hasFixedGmailAccount() || !!c.gmailAccount;
-    return [!hasAccount && 'cuenta de Gmail (.env.local o inicio de sesión)', !c.recipientEmail && 'destinatario']
-      .filter(Boolean) as string[];
-  }
-  return [
-    !c.serviceId && 'Service ID', !c.templateId && 'Template ID',
-    !c.publicKey && 'Public Key', !c.recipientEmail && 'destinatario',
-  ].filter(Boolean) as string[];
+  const hasAccount = hasFixedGmailAccount() || !!c.gmailAccount;
+  return [!hasAccount && 'cuenta de Gmail (.env.local o inicio de sesión)', !c.recipientEmail && 'destinatario']
+    .filter(Boolean) as string[];
 }
 
 export function isEmailConfigured(c: EmailConfig): boolean {
@@ -58,16 +48,11 @@ export async function sendAlertEmail(config: EmailConfig, payload: AlertEmailPay
   const label = translateAlertType(payload.type);
   const missing = missingFields(config);
   if (missing.length) {
-    const where = config.provider === 'gmail' ? 'Gmail' : 'EmailJS';
-    emailLog('warn', `No se envió "${label}": ${where} incompleto`, `Falta: ${missing.join(', ')}`);
-    return { ok: false, error: `${where} no está configurado (falta ${missing.join(', ')})`, retryable: false };
+    emailLog('warn', `No se envió "${label}": Gmail sin configurar`, `Falta: ${missing.join(', ')}`);
+    return { ok: false, error: `Gmail no está configurado (falta ${missing.join(', ')})`, retryable: false };
   }
-  return config.provider === 'gmail'
-    ? sendWithGmail(config, payload, label)
-    : sendWithEmailJS(config, payload, label);
+  return sendWithGmail(config, payload, label);
 }
-
-// ─── Gmail API ────────────────────────────────────────────────────────────────
 
 async function sendWithGmail(config: EmailConfig, p: AlertEmailPayload, label: string): Promise<EmailResult> {
   // Cuenta fija (.env.local) primero: no requiere iniciar sesión en el teléfono
@@ -143,7 +128,7 @@ function gmailHint(status: number, body: string): string {
   return '';
 }
 
-/** Cuerpo del correo (Gmail API no usa plantillas externas). */
+/** Cuerpo HTML del correo. */
 function renderAlertHtml(p: AlertEmailPayload, label: string): string {
   const esc = (t: string) => t.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
   return `<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;background:#0f131c;color:#dfe2ef;border-radius:12px;overflow:hidden">
@@ -156,79 +141,6 @@ function renderAlertHtml(p: AlertEmailPayload, label: string): string {
 <b>Modo:</b> ${esc(translateMode(p.mode))}<br><b>Cámara:</b> ${esc(p.esp32Ip)}</p>
 <p style="margin:16px 0 0;color:#869397;font-size:13px">${p.snapshotDataUrl ? 'La foto del evento va adjunta (intruso.jpg).' : 'No se pudo obtener foto de la cámara.'}</p>
 </div></div>`;
-}
-
-// ─── EmailJS (respaldo) ───────────────────────────────────────────────────────
-
-async function sendWithEmailJS(config: EmailConfig, payload: AlertEmailPayload, label: string): Promise<EmailResult> {
-  const templateParams: Record<string, string> = {
-    to_email: config.recipientEmail,
-    from_name: config.senderName || 'SentryNode',
-    alert_timestamp: humanTime(payload.timestamp),
-    alert_type: label,
-    alert_description: payload.description,
-    security_mode: translateMode(payload.mode),
-    esp32_ip: payload.esp32Ip,
-  };
-  if (payload.snapshotDataUrl) templateParams.snapshot = payload.snapshotDataUrl;
-
-  const body: Record<string, unknown> = {
-    service_id: config.serviceId,
-    template_id: config.templateId,
-    user_id: config.publicKey,
-    template_params: templateParams,
-  };
-  if (config.privateKey) body.accessToken = config.privateKey;
-
-  const json = JSON.stringify(body);
-  const photoKb = payload.snapshotDataUrl ? Math.round(payload.snapshotDataUrl.length / 1024) : 0;
-  emailLog('info', `Enviando "${label}" por EmailJS a ${config.recipientEmail}`,
-    `service ${maskId(config.serviceId)} · template ${maskId(config.templateId)} · ` +
-    `${photoKb ? `foto ${photoKb} KB` : 'sin foto'} · petición ${Math.round(json.length / 1024)} KB`);
-
-  const t0 = Date.now();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), EMAIL_TIMEOUT_MS);
-  try {
-    const res = await fetch(EMAILJS_API, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: json,
-      signal: controller.signal,
-    });
-    const ms = Date.now() - t0;
-    if (res.ok) {
-      emailLog('success', `Enviado "${label}" ✓ por EmailJS (HTTP ${res.status}, ${ms} ms)`,
-        'EmailJS lo aceptó. Si no llega, revisa spam y el campo "To Email" del template.');
-      return { ok: true };
-    }
-    const text = (await res.text()).slice(0, 200);
-    // 4xx = configuración mala (no sirve reintentar). 429/5xx = transitorio.
-    const retryable = res.status === 429 || res.status >= 500;
-    emailLog('error', `Falló "${label}": HTTP ${res.status} (${ms} ms)`, `${text}${emailJsHint(res.status, text)}`);
-    return { ok: false, error: `EmailJS ${res.status}: ${text}`, retryable };
-  } catch (e) {
-    const timedOut = controller.signal.aborted;
-    const error = timedOut ? 'Timeout enviando el correo' : 'Sin internet en el teléfono';
-    emailLog('error', `Falló "${label}": ${error}`,
-      timedOut ? `Sin respuesta en ${EMAIL_TIMEOUT_MS / 1000} s` : `${String(e)} · ¿el teléfono tiene datos o Wi-Fi con internet?`);
-    return { ok: false, error, retryable: true };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function emailJsHint(status: number, text: string): string {
-  const t = text.toLowerCase();
-  if (status === 403 && t.includes('non-browser')) {
-    return ' → Activa "Allow EmailJS API for non-browser applications" en Account → Security.';
-  }
-  if (status === 403) return ' → Revisa la Public Key o, si activaste strict mode, la Private Key.';
-  if (t.includes('template')) return ' → Template ID incorrecto.';
-  if (t.includes('service')) return ' → Service ID incorrecto o servicio de Gmail desconectado.';
-  if (status === 413 || t.includes('size') || t.includes('large')) return ' → Adjunto demasiado grande para tu plan.';
-  if (status === 429) return ' → Límite de envíos de EmailJS; se reintentará solo.';
-  return '';
 }
 
 // ─── Comunes ──────────────────────────────────────────────────────────────────

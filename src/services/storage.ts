@@ -22,12 +22,7 @@ export const MAX_ALERTS = 50;
 export const MAX_ALERTS_WITH_IMAGE = 15; // Las fotos ocupan ~15 KB c/u en base64
 
 export const DEFAULT_EMAIL_CONFIG: EmailConfig = {
-  provider: 'gmail',
   gmailAccount: '',
-  serviceId: '',
-  templateId: '',
-  publicKey: '',
-  privateKey: '',
   recipientEmail: 'alejocastiblan2007@gmail.com',
   senderName: 'SentryNode',
 };
